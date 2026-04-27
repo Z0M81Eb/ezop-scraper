@@ -3,7 +3,7 @@ from bs4 import BeautifulSoup
 import csv
 
 # URL koji ciljamo
-url = 'https://www.ezop-antikvarijat.hr/kategorija-proizvoda/gramofonske-ploce/'
+url = 'https://ezop-antikvarijat.hr/kategorija/glazba/'
 
 # Inicijalizacija posebnog scrapera koji zaobilazi Cloudflare zaštitu
 scraper = cloudscraper.create_scraper()
