@@ -1,20 +1,20 @@
 name: Ezop Dnevni Scraper
 
 on:
-  workflow_dispatch: # Omogućuje nam da ga ručno pokrenemo klikom na gumb
+  workflow_dispatch:
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Dopušta skripti da spremi CSV nazad u mapu
+      contents: write
     
     steps:
     - name: Preuzmi repozitorij
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       
     - name: Postavi Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.10'
         
