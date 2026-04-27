@@ -1,0 +1,33 @@
+name: Ezop Dnevni Scraper
+
+on:
+  workflow_dispatch: # Omogućuje nam da ga ručno pokrenemo klikom na gumb
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Dopušta skripti da spremi CSV nazad u mapu
+    
+    steps:
+    - name: Preuzmi repozitorij
+      uses: actions/checkout@v3
+      
+    - name: Postavi Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        
+    - name: Instaliraj alate
+      run: pip install -r requirements.txt
+      
+    - name: Pokreni scraper
+      run: python scraper.py
+      
+    - name: Spremi CSV datoteku
+      run: |
+        git config user.name "Automated"
+        git config user.email "actions@users.noreply.github.com"
+        git add ezop_ploce.csv
+        git commit -m "Ažurirane cijene ploča" || echo "Nema promjena"
+        git push
