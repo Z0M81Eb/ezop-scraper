@@ -12,6 +12,8 @@ jobs:
     steps:
     - name: Preuzmi repozitorij
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
       
     - name: Postavi Python
       uses: actions/setup-python@v5
