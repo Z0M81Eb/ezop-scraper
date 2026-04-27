@@ -12,8 +12,6 @@ jobs:
     steps:
     - name: Preuzmi repozitorij
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
       
     - name: Postavi Python
       uses: actions/setup-python@v5
@@ -26,10 +24,8 @@ jobs:
     - name: Pokreni scraper
       run: python scraper.py
       
-    - name: Spremi CSV datoteku
-      run: |
-        git config user.name "Automated"
-        git config user.email "actions@users.noreply.github.com"
-        git add ezop_ploce.csv
-        git commit -m "Ažurirane cijene ploča" || echo "Nema promjena"
-        git push -f origin main
+    - name: Pametno spremanje CSV-a
+      uses: stefanzweifel/git-auto-commit-action@v5
+      with:
+        commit_message: "Ažurirane cijene ploča"
+        file_pattern: 'ezop_ploce.csv'
