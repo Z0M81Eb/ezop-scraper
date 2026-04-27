@@ -1,8 +1,7 @@
 import cloudscraper
 from bs4 import BeautifulSoup
 import csv
-
-url = 'https://ezop-antikvarijat.hr/kategorija/glazba/'
+import time
 
 scraper = cloudscraper.create_scraper(
     browser={
@@ -12,52 +11,79 @@ scraper = cloudscraper.create_scraper(
     }
 )
 
-try:
-    response = scraper.get(url, timeout=30)
-    soup = BeautifulSoup(response.text, 'html.parser')
+all_products = []
+page = 1
+
+while True:
+    if page == 1:
+        url = 'https://ezop-antikvarijat.hr/kategorija/glazba/'
+    else:
+        url = f'https://ezop-antikvarijat.hr/kategorija/glazba/page/{page}/'
+        
+    print(f"Skeniram stranicu {page}...")
     
-    products = []
-    
-    # Sada gađamo točno onaj glavni kontejner koji drži cijelu ploču
-    items = soup.select('div.arhiva-all-info')
-    
-    for item in items:
-        try:
-            # Tražimo izvođača (h2)
-            artist_el = item.select_one('h2.woocommerce-loop-product__title')
-            artist = artist_el.text.strip() if artist_el else ""
+    try:
+        response = scraper.get(url, timeout=30)
+        
+        if response.status_code == 404:
+            print("Došli smo do kraja kataloga (Error 404).")
+            break
             
-            # Tražimo naziv albuma (p)
-            album_el = item.select_one('p.product_author_black')
-            album = album_el.text.strip() if album_el else ""
+        soup = BeautifulSoup(response.text, 'html.parser')
+        items = soup.select('div.arhiva-all-info')
+        
+        if len(items) == 0:
+            print("Nema više proizvoda. Završavam pretraživanje.")
+            break
             
-            # Spajamo ih crticom kako bi lijepo izgledalo u WP-u
-            full_title = f"{artist} - {album}" if album else artist
-            
-            # Tražimo cijenu (spajamo eure i cente)
-            euro_el = item.select_one('span.big')
-            cent_el = item.select_one('span.small_price')
-            
-            if euro_el and cent_el:
-                price = f"{euro_el.text.strip()},{cent_el.text.strip()} €"
-            elif euro_el:
-                price = f"{euro_el.text.strip()} €"
-            else:
-                price = ""
-            
-            # Ako postoji naslov i cijena, ubacujemo u listu
-            if full_title and price:
-                products.append([full_title, price])
+        for item in items:
+            try:
+                # NOVI KORAK: Provjera je li proizvod zaista gramofonska ploča
+                is_vinyl = False
+                for li in item.select('li'):
+                    if "Medij:" in li.text and "Gramofonska ploča" in li.text:
+                        is_vinyl = True
+                        break
                 
-        except Exception as e:
-            continue
+                # Ako nije gramofonska ploča, odmah preskačemo na idući proizvod
+                if not is_vinyl:
+                    continue
 
-    # Zapisujemo rezultate
-    with open('ezop_ploce.csv', 'w', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        writer.writerow(['Naslov', 'Cijena'])
-        writer.writerows(products)
-        print(f"Bravo! Uspješno posisano i spremljeno {len(products)} ploča.")
+                artist_el = item.select_one('h2.woocommerce-loop-product__title')
+                artist = artist_el.text.strip() if artist_el else ""
+                
+                album_el = item.select_one('p.product_author_black')
+                album = album_el.text.strip() if album_el else ""
+                
+                full_title = f"{artist} - {album}" if album else artist
+                
+                euro_el = item.select_one('span.big')
+                cent_el = item.select_one('span.small_price')
+                
+                if euro_el and cent_el:
+                    price = f"{euro_el.text.strip()},{cent_el.text.strip()} €"
+                elif euro_el:
+                    price = f"{euro_el.text.strip()} €"
+                else:
+                    price = ""
+                
+                if full_title and price:
+                    all_products.append([full_title, price])
+                    
+            except Exception as e:
+                continue
+                
+        print(f"Stranica {page} obrađena. Trenutno uhvaćeno: {len(all_products)} gramofonskih ploča.")
+        page += 1
+        
+        time.sleep(2)
+        
+    except Exception as e:
+        print(f"Greška na stranici {page}: {e}. Prekidam rad.")
+        break
 
-except Exception as e:
-    print(f"Greška: {e}")
+with open('ezop_ploce.csv', 'w', newline='', encoding='utf-8') as f:
+    writer = csv.writer(f)
+    writer.writerow(['Naslov', 'Cijena'])
+    writer.writerows(all_products)
+    print(f"GOTOVO! Uspješno filtrirano i spremljeno ukupno {len(all_products)} isključivo gramofonskih ploča.")
