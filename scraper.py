@@ -52,23 +52,43 @@ while True:
                 
                 if not is_vinyl: continue
 
-                art = item.select_one('h2.woocommerce-loop-product__title')
-                alb = item.select_one('p.product_author_black')
-                title = f"{art.text.strip()} - {alb.text.strip()}" if art and alb else ""
+                art_el = item.select_one('h2.woocommerce-loop-product__title')
+                alb_el = item.select_one('p.product_author_black')
+                title = f"{art_el.text.strip()} - {alb_el.text.strip()}" if art_el and alb_el else ""
                 
+                # Izvlačenje URL-a proizvoda
+                a_tag = item.find('a')
+                if not a_tag:
+                    parent_li = item.find_parent('li')
+                    a_tag = parent_li.find('a') if parent_li else None
+                product_url = a_tag['href'] if a_tag and a_tag.has_attr('href') else ""
+                
+                # Izvlačenje URL-a slike (penjemo se u nad-element jer slika nije u arhiva-all-info)
+                parent_block = item.find_parent('li') or item.find_parent('div') or item.parent
+                img_tag = parent_block.find('img') if parent_block else item.find('img')
+                image_url = img_tag['src'] if img_tag and img_tag.has_attr('src') else ""
+                
+                # Cijena
                 e, c = item.select_one('span.big'), item.select_one('span.small_price')
                 price = f"{e.text.strip()},{c.text.strip()}" if e and c else ""
                 
                 if title and price:
-                    # Dodajemo "Rabljeno" na kraj za kompatibilnost
-                    all_products.append([title, price, s_medija, s_omota, "Rabljeno"])
-            except: continue
+                    # Ista struktura: Naslov, Cijena, URL_Proizvoda, URL_Slike, Stanje_Medija, Stanje_Omota, Tip_Artikla
+                    all_products.append([
+                        title, price, product_url, image_url, s_medija, s_omota, "Rabljeno"
+                    ])
+            except Exception as e:
+                continue
+                
+        print(f"Stranica {page} obrađena. Uhvaćeno: {len(all_products)} ploča.")
         page += 1
         time.sleep(2)
-    except: break
+        
+    except Exception as e:
+        break
 
 with open('ezop_ploce.csv', 'w', newline='', encoding='utf-8') as f:
     writer = csv.writer(f)
-    writer.writerow(['Naslov', 'Cijena', 'Stanje_Medija', 'Stanje_Omota', 'Tip_Artikla'])
+    writer.writerow(['Naslov', 'Cijena', 'URL_Proizvoda', 'URL_Slike', 'Stanje_Medija', 'Stanje_Omota', 'Tip_Artikla'])
     writer.writerows(all_products)
-    print("Ezop uspješno završen!")
+    print("Ezop GOTOV!")
