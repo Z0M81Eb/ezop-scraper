@@ -3,7 +3,6 @@ from bs4 import BeautifulSoup
 import csv
 import time
 
-# Provjerena funkcija za pretvorbu ocjena prema Goldmine standardu
 def pretvori_ocjenu(ezop_ocjena):
     try:
         ocjena = int(ezop_ocjena)
@@ -24,18 +23,26 @@ scraper = cloudscraper.create_scraper(
 all_products = []
 page = 1
 
-# OGRANIČENO NA 5 STRANICA ZA ZADNJU VERIFIKACIJU
-while page <= 5:
+# PETLJA BEZ OGRANIČENJA - Ide do kraja kataloga
+while True:
     url = 'https://ezop-antikvarijat.hr/kategorija/glazba/' if page == 1 else f'https://ezop-antikvarijat.hr/kategorija/glazba/page/{page}/'
     print(f"Skeniram stranicu {page}...")
     
     try:
         response = scraper.get(url, timeout=30)
-        if response.status_code == 404: break
+        
+        # Prekidamo kad server javi da nema više stranica (404)
+        if response.status_code == 404: 
+            print("Kraj kataloga detektiran (404).")
+            break
             
         soup = BeautifulSoup(response.text, 'html.parser')
         items = soup.select('div.arhiva-all-info')
-        if len(items) == 0: break
+        
+        # Prekidamo ako je stranica učitana, ali nema proizvoda
+        if len(items) == 0: 
+            print("Nema više proizvoda. Završavam.")
+            break
             
         for item in items:
             try:
@@ -47,7 +54,6 @@ while page <= 5:
                 for li in info_list:
                     tekst = li.text.lower()
                     
-                    # Tražimo bilo koju varijantu koja sadrži 'gramofon' (ploča, singl, maxi)
                     if "medij" in tekst and "gramofon" in tekst:
                         is_vinyl = True
                     
@@ -87,14 +93,16 @@ while page <= 5:
                 
         print(f"Stranica {page} obrađena. Trenutno uhvaćeno: {len(all_products)} vinila.")
         page += 1
+        
+        # Pauza od 2 sekunde da ne dobijemo ban
         time.sleep(2)
         
     except Exception as e:
-        print(f"Greška na stranici {page}: {e}")
+        print(f"Greška na stranici {page}: {e}. Prekidam.")
         break
 
 with open('ezop_ploce.csv', 'w', newline='', encoding='utf-8') as f:
     writer = csv.writer(f)
     writer.writerow(['Naslov', 'Cijena', 'Stanje_Medija', 'Stanje_Omota'])
     writer.writerows(all_products)
-    print("TEST USPJEŠAN! Provjeri CSV datoteku.")
+    print(f"GOTOVO! Uspješno posisano i spremljeno ukupno {len(all_products)} vinila.")
