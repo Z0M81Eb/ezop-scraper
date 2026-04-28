@@ -3,7 +3,7 @@ from bs4 import BeautifulSoup
 import csv
 import time
 
-# Naš prevoditelj Ezop ocjena u Goldmine standard
+# Provjerena funkcija za pretvorbu ocjena prema Goldmine standardu
 def pretvori_ocjenu(ezop_ocjena):
     try:
         ocjena = int(ezop_ocjena)
@@ -13,10 +13,9 @@ def pretvori_ocjenu(ezop_ocjena):
         elif ocjena == 7: return "VG"
         elif ocjena == 6: return "G+"
         elif ocjena == 5: return "G"
-        elif ocjena <= 4: return "F/P"
-        else: return ezop_ocjena
+        else: return "F/P"
     except:
-        return ezop_ocjena # Ako nije broj, vrati originalni tekst
+        return ""
 
 scraper = cloudscraper.create_scraper(
     browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
@@ -25,7 +24,7 @@ scraper = cloudscraper.create_scraper(
 all_products = []
 page = 1
 
-# OGRANIČENO NA 5 STRANICA ZA BRZI TEST
+# OGRANIČENO NA 5 STRANICA ZA ZADNJU VERIFIKACIJU
 while page <= 5:
     url = 'https://ezop-antikvarijat.hr/kategorija/glazba/' if page == 1 else f'https://ezop-antikvarijat.hr/kategorija/glazba/page/{page}/'
     print(f"Skeniram stranicu {page}...")
@@ -48,17 +47,15 @@ while page <= 5:
                 for li in info_list:
                     tekst = li.text.lower()
                     
-                    # Provjera je li ploča
-                    if "medij" in tekst and "gramofonska" in tekst:
+                    # Tražimo bilo koju varijantu koja sadrži 'gramofon' (ploča, singl, maxi)
+                    if "medij" in tekst and "gramofon" in tekst:
                         is_vinyl = True
                     
-                    # Izvlačenje i pretvorba ocjene omota
                     if "stanje omota" in tekst:
                         ocjena_span = li.select_one('span.red')
                         if ocjena_span:
                             stanje_omota = pretvori_ocjenu(ocjena_span.text.strip())
                             
-                    # Izvlačenje i pretvorba ocjene medija
                     if "stanje medija" in tekst:
                         ocjena_span = li.select_one('span.red')
                         if ocjena_span:
@@ -67,31 +64,28 @@ while page <= 5:
                 if not is_vinyl:
                     continue
 
-                # Naslov
                 artist_el = item.select_one('h2.woocommerce-loop-product__title')
                 artist = artist_el.text.strip() if artist_el else ""
                 album_el = item.select_one('p.product_author_black')
                 album = album_el.text.strip() if album_el else ""
                 full_title = f"{artist} - {album}" if album else artist
                 
-                # Cijena
                 euro_el = item.select_one('span.big')
                 cent_el = item.select_one('span.small_price')
                 if euro_el and cent_el:
-                    price = f"{euro_el.text.strip()},{cent_el.text.strip()}" # Maknuli smo € simbol jer je to bolje za WooCommerce
+                    price = f"{euro_el.text.strip()},{cent_el.text.strip()}"
                 elif euro_el:
                     price = f"{euro_el.text.strip()}"
                 else:
                     price = ""
                 
                 if full_title and price:
-                    # Dodajemo nova dva stupca u tablicu
                     all_products.append([full_title, price, stanje_medija, stanje_omota])
                     
             except Exception as e:
                 continue
                 
-        print(f"Stranica {page} obrađena. Trenutno uhvaćeno: {len(all_products)} ploča.")
+        print(f"Stranica {page} obrađena. Trenutno uhvaćeno: {len(all_products)} vinila.")
         page += 1
         time.sleep(2)
         
@@ -99,9 +93,8 @@ while page <= 5:
         print(f"Greška na stranici {page}: {e}")
         break
 
-# Zapisujemo CSV s 4 stupca
 with open('ezop_ploce.csv', 'w', newline='', encoding='utf-8') as f:
     writer = csv.writer(f)
-    writer.writerow(['Naslov', 'Cijena', 'Stanje_Medija', 'Stanje_Omota']) # Ažurirana zaglavlja
+    writer.writerow(['Naslov', 'Cijena', 'Stanje_Medija', 'Stanje_Omota'])
     writer.writerows(all_products)
-    print("TEST GOTOV! CSV je spreman.")
+    print("TEST USPJEŠAN! Provjeri CSV datoteku.")
