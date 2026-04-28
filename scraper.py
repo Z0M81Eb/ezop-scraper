@@ -13,8 +13,7 @@ def pretvori_ocjenu(ezop_ocjena):
         elif ocjena == 6: return "G+"
         elif ocjena == 5: return "G"
         else: return "F/P"
-    except:
-        return ""
+    except: return ""
 
 scraper = cloudscraper.create_scraper(
     browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
@@ -23,86 +22,53 @@ scraper = cloudscraper.create_scraper(
 all_products = []
 page = 1
 
-# PETLJA BEZ OGRANIČENJA - Ide do kraja kataloga
 while True:
     url = 'https://ezop-antikvarijat.hr/kategorija/glazba/' if page == 1 else f'https://ezop-antikvarijat.hr/kategorija/glazba/page/{page}/'
-    print(f"Skeniram stranicu {page}...")
+    print(f"Skeniram Ezop stranicu {page}...")
     
     try:
         response = scraper.get(url, timeout=30)
-        
-        # Prekidamo kad server javi da nema više stranica (404)
-        if response.status_code == 404: 
-            print("Kraj kataloga detektiran (404).")
-            break
+        if response.status_code == 404: break
             
         soup = BeautifulSoup(response.text, 'html.parser')
         items = soup.select('div.arhiva-all-info')
-        
-        # Prekidamo ako je stranica učitana, ali nema proizvoda
-        if len(items) == 0: 
-            print("Nema više proizvoda. Završavam.")
-            break
+        if len(items) == 0: break
             
         for item in items:
             try:
                 is_vinyl = False
-                stanje_medija = ""
-                stanje_omota = ""
+                s_medija, s_omota = "", ""
                 
                 info_list = item.select('ul.arhiva-cf li')
                 for li in info_list:
-                    tekst = li.text.lower()
-                    
-                    if "medij" in tekst and "gramofon" in tekst:
-                        is_vinyl = True
-                    
-                    if "stanje omota" in tekst:
-                        ocjena_span = li.select_one('span.red')
-                        if ocjena_span:
-                            stanje_omota = pretvori_ocjenu(ocjena_span.text.strip())
-                            
-                    if "stanje medija" in tekst:
-                        ocjena_span = li.select_one('span.red')
-                        if ocjena_span:
-                            stanje_medija = pretvori_ocjenu(ocjena_span.text.strip())
+                    t = li.text.lower()
+                    if "medij" in t and "gramofon" in t: is_vinyl = True
+                    if "stanje omota" in t:
+                        span = li.select_one('span.red')
+                        if span: s_omota = pretvori_ocjenu(span.text.strip())
+                    if "stanje medija" in t:
+                        span = li.select_one('span.red')
+                        if span: s_medija = pretvori_ocjenu(span.text.strip())
                 
-                if not is_vinyl:
-                    continue
+                if not is_vinyl: continue
 
-                artist_el = item.select_one('h2.woocommerce-loop-product__title')
-                artist = artist_el.text.strip() if artist_el else ""
-                album_el = item.select_one('p.product_author_black')
-                album = album_el.text.strip() if album_el else ""
-                full_title = f"{artist} - {album}" if album else artist
+                art = item.select_one('h2.woocommerce-loop-product__title')
+                alb = item.select_one('p.product_author_black')
+                title = f"{art.text.strip()} - {alb.text.strip()}" if art and alb else ""
                 
-                euro_el = item.select_one('span.big')
-                cent_el = item.select_one('span.small_price')
-                if euro_el and cent_el:
-                    price = f"{euro_el.text.strip()},{cent_el.text.strip()}"
-                elif euro_el:
-                    price = f"{euro_el.text.strip()}"
-                else:
-                    price = ""
+                e, c = item.select_one('span.big'), item.select_one('span.small_price')
+                price = f"{e.text.strip()},{c.text.strip()}" if e and c else ""
                 
-                if full_title and price:
-                    all_products.append([full_title, price, stanje_medija, stanje_omota])
-                    
-            except Exception as e:
-                continue
-                
-        print(f"Stranica {page} obrađena. Trenutno uhvaćeno: {len(all_products)} vinila.")
+                if title and price:
+                    # Dodajemo "Rabljeno" na kraj za kompatibilnost
+                    all_products.append([title, price, s_medija, s_omota, "Rabljeno"])
+            except: continue
         page += 1
-        
-        # Pauza od 2 sekunde da ne dobijemo ban
         time.sleep(2)
-        
-    except Exception as e:
-        print(f"Greška na stranici {page}: {e}. Prekidam.")
-        break
+    except: break
 
 with open('ezop_ploce.csv', 'w', newline='', encoding='utf-8') as f:
     writer = csv.writer(f)
-    writer.writerow(['Naslov', 'Cijena', 'Stanje_Medija', 'Stanje_Omota'])
+    writer.writerow(['Naslov', 'Cijena', 'Stanje_Medija', 'Stanje_Omota', 'Tip_Artikla'])
     writer.writerows(all_products)
-    print(f"GOTOVO! Uspješno posisano i spremljeno ukupno {len(all_products)} vinila.")
+    print("Ezop uspješno završen!")
