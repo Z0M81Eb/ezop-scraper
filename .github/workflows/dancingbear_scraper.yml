@@ -1,0 +1,34 @@
+name: Dancing Bear Scraper
+
+on:
+  workflow_dispatch: # Ručno pokretanje na gumb
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Preuzimanje koda
+      uses: actions/checkout@v3
+
+    - name: Instalacija Pythona
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Instalacija alata
+      run: |
+        pip install cloudscraper beautifulsoup4
+
+    - name: Pokretanje robota
+      run: python scraper_dancingbear.py
+
+    - name: Spremanje CSV-a natrag u repozitorij
+      run: |
+        git config --global user.name 'GitHub Action'
+        git config --global user.email 'action@github.com'
+        git add dancingbear_ploce.csv
+        git commit -m "Azuriranje Dancing Bear baze" || echo "Nema promjena"
+        git push
