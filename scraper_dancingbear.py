@@ -10,15 +10,14 @@ scraper = cloudscraper.create_scraper(
 all_products = []
 page = 1
 
-# Krećemo u potragu za svim stranicama
-while True:
+# OGRANIČENO NA 5 STRANICA ZA TEST
+while page <= 5:
     url = f'https://dancingbear.hr/kategorija-proizvoda/vinyl/page/{page}/'
     print(f"Skeniram Dancing Bear stranicu {page}...")
     
     try:
         response = scraper.get(url, timeout=30)
         
-        # Ako dobijemo 404, znači da nema više stranica
         if response.status_code == 404: 
             print("Kraj kataloga detektiran.")
             break
@@ -36,13 +35,11 @@ while True:
                 
                 price_el = item.select_one('span.woocommerce-Price-amount bdi')
                 if price_el:
-                    # Čistimo cijenu od simbola i razmaka
                     price = price_el.text.replace('€', '').replace('\xa0', '').strip()
                 else:
                     price = ""
                 
                 if full_title and price:
-                    # Budući da je Dancing Bear shop s novom robom:
                     stanje_medija = "Sealed"
                     stanje_omota = "Sealed"
                     tip_artikla = "Novo"
@@ -52,19 +49,17 @@ while True:
             except Exception as e:
                 continue
                 
-        print(f"Trenutno uhvaćeno: {len(all_products)} ploča.")
+        print(f"Stranica {page} obrađena. Trenutno uhvaćeno: {len(all_products)} ploča.")
         page += 1
         
-        # Pauza od 2 sekunde da nas server ne blokira
         time.sleep(2)
         
     except Exception as e:
-        print(f"Greška: {e}")
+        print(f"Greška na stranici {page}: {e}")
         break
 
-# Spremanje u zaseban CSV
 with open('dancingbear_ploce.csv', 'w', newline='', encoding='utf-8') as f:
     writer = csv.writer(f)
     writer.writerow(['Naslov', 'Cijena', 'Stanje_Medija', 'Stanje_Omota', 'Tip_Artikla'])
     writer.writerows(all_products)
-    print(f"Završeno! Ukupno spremljeno {len(all_products)} novih ploča.")
+    print("TEST GOTOV! CSV je spreman.")
