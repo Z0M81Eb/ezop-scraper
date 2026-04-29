@@ -1,24 +1,34 @@
 import cloudscraper
 from bs4 import BeautifulSoup
 import csv
+import time
 
 scraper = cloudscraper.create_scraper(
     browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
 )
 
 all_products = []
-# Ograničeno samo na stranicu 1 za brzi test
 page = 1
 
-url = f'https://dancingbear.hr/kategorija-proizvoda/vinyl/page/{page}/'
-print(f"Skeniram Dancing Bear stranicu {page} (TEST VERZIJA)...")
-
-try:
-    response = scraper.get(url, timeout=30)
-    if response.status_code == 200:
+while True:
+    url = f'https://dancingbear.hr/kategorija-proizvoda/vinyl/page/{page}/'
+    print(f"Skeniram Dancing Bear stranicu {page}...")
+    
+    try:
+        response = scraper.get(url, timeout=30)
+        # Ako server javi da stranica ne postoji, došli smo do kraja
+        if response.status_code == 404: 
+            print("Kraj kataloga detektiran (404).")
+            break
+            
         soup = BeautifulSoup(response.text, 'html.parser')
         items = soup.select('div.product-inner')
         
+        # Ako je stranica učitana, ali na njoj nema proizvoda, također smo na kraju
+        if len(items) == 0: 
+            print("Nema više proizvoda na stranici, završavam skeniranje.")
+            break
+            
         for item in items:
             try:
                 title_el = item.select_one('li.title h2 a')
@@ -63,14 +73,16 @@ try:
             except Exception as e:
                 continue
                 
-        print(f"Test skeniranje gotovo. Uhvaćeno: {len(all_products)} ploča.")
+        print(f"Stranica {page} obrađena. Ukupno uhvaćeno do sada: {len(all_products)} ploča.")
+        page += 1
+        time.sleep(2) # Pauza da ne preopteretimo njihov server
+        
+    except Exception as e:
+        print(f"Došlo je do greške u spajanju: {e}")
+        break
 
-except Exception as e:
-    print(f"Došlo je do greške: {e}")
-
-# Spremanje u testnu datoteku
-with open('dancingbear_test.csv', 'w', newline='', encoding='utf-8') as f:
+with open('dancingbear_ploce.csv', 'w', newline='', encoding='utf-8') as f:
     writer = csv.writer(f)
     writer.writerow(['Naslov', 'Cijena', 'URL_Proizvoda', 'URL_Slike', 'Stanje_Medija', 'Stanje_Omota', 'Tip_Artikla'])
     writer.writerows(all_products)
-    print("Dancing Bear TEST GOTOV! Otvori 'dancingbear_test.csv' i provjeri linkove slika.")
+    print("Dancing Bear GOTOV! Spreman za uvoz u Agregator.")
