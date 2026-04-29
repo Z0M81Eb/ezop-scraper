@@ -56,38 +56,42 @@ while True:
                 alb_el = item.select_one('p.product_author_black')
                 title = f"{art_el.text.strip()} - {alb_el.text.strip()}" if art_el and alb_el else ""
                 
-                # Izvlačenje URL-a proizvoda
                 a_tag = item.find('a')
                 if not a_tag:
                     parent_li = item.find_parent('li')
                     a_tag = parent_li.find('a') if parent_li else None
                 product_url = a_tag['href'] if a_tag and a_tag.has_attr('href') else ""
                 
-                # --- POPRAVLJENO IZVLAČENJE SLIKE ZA LAZY LOAD ---
+                # --- NOVI, PAMETNI SUSTAV ZA SLIKE ---
                 parent_block = item.find_parent('li') or item.find_parent('div') or item.parent
-                img_tag = parent_block.find('img') if parent_block else item.find('img')
+                
+                # SADA tražimo SVE slike unutar bloka
+                img_tags = parent_block.find_all('img') if parent_block else item.find_all('img')
                 
                 image_url = ""
-                if img_tag:
-                    # 1. Pokušaj prvo naći "srcset"
-                    if img_tag.has_attr('srcset'):
-                        srcset_links = img_tag['srcset'].split(',')
-                        if srcset_links:
-                            image_url = srcset_links[0].strip().split(' ')[0]
+                for img in img_tags:
+                    temp_url = ""
                     
-                    # 2. Ako nema srcset ili je on neobičan, pokušavamo s data-src
-                    if not image_url or image_url.startswith('data:image'):
-                         if img_tag.has_attr('data-src'):
-                              image_url = img_tag['data-src']
+                    # 1. Gledamo srcset (vučemo najbolju rezoluciju)
+                    if img.has_attr('srcset'):
+                        srcset_links = img['srcset'].split(',')
+                        if srcset_links:
+                            # Uzimamo zadnji link iz niza (jer je u WP-u obično onaj s najvećim 'w' brojem)
+                            temp_url = srcset_links[-1].strip().split(' ')[0]
+                    
+                    # 2. Ako nema srcset, tražimo data-src
+                    if not temp_url and img.has_attr('data-src'):
+                        temp_url = img['data-src']
                               
-                    # 3. Ako i dalje nemamo dobar link, povlačimo standardni 'src'
-                    if not image_url or image_url.startswith('data:image'):
-                         if img_tag.has_attr('src'):
-                              image_url = img_tag['src']
+                    # 3. Na kraju gledamo standardni src
+                    if not temp_url and img.has_attr('src'):
+                        temp_url = img['src']
                               
-                    # Očisti ako je neki krivi format i dalje ostao (npr. prazan SVG kod)
-                    if image_url.startswith('data:image'):
-                        image_url = ""
+                    # PROVJERA: Zanemarujemo base64 i generičke Ezop ikone
+                    if temp_url and not temp_url.startswith('data:image'):
+                        if 'themes/ezop' not in temp_url and 'placeholder' not in temp_url.lower():
+                            image_url = temp_url
+                            break # Našli smo pravu sliku, možemo prekinuti petlju traženja!
                 # ------------------------------------------------
                 
                 # Cijena
