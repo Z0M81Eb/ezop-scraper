@@ -8,24 +8,27 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    
+
     steps:
     - name: Preuzmi repozitorij
       uses: actions/checkout@v4
-      
+
     - name: Postavi Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-        
+
     - name: Instaliraj alate
       run: pip install -r requirements.txt
-      
+
     - name: Pokreni scraper
-      run: python scraper.py
-      
-    - name: Pametno spremanje CSV-a
-      uses: stefanzweifel/git-auto-commit-action@v5
-      with:
-        commit_message: "Ažurirane cijene ploča"
-        file_pattern: 'ezop_ploce.csv'
+      run: python scraper_ezop.py
+
+    - name: Pametno spremanje CSV-a i osiguranje od sudara
+      run: |
+        git config --global user.name 'GitHub Action'
+        git config --global user.email 'action@github.com'
+        git add ezop_ploce.csv
+        git commit -m "Ažurirane cijene ploča" || exit 0
+        git pull --rebase origin main
+        git push
