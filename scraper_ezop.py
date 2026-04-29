@@ -63,24 +63,45 @@ while True:
                     a_tag = parent_li.find('a') if parent_li else None
                 product_url = a_tag['href'] if a_tag and a_tag.has_attr('href') else ""
                 
-                # Izvlačenje URL-a slike (penjemo se u nad-element jer slika nije u arhiva-all-info)
+                # --- POPRAVLJENO IZVLAČENJE SLIKE ZA LAZY LOAD ---
                 parent_block = item.find_parent('li') or item.find_parent('div') or item.parent
                 img_tag = parent_block.find('img') if parent_block else item.find('img')
-                image_url = img_tag['src'] if img_tag and img_tag.has_attr('src') else ""
+                
+                image_url = ""
+                if img_tag:
+                    # 1. Pokušaj prvo naći "srcset"
+                    if img_tag.has_attr('srcset'):
+                        srcset_links = img_tag['srcset'].split(',')
+                        if srcset_links:
+                            image_url = srcset_links[0].strip().split(' ')[0]
+                    
+                    # 2. Ako nema srcset ili je on neobičan, pokušavamo s data-src
+                    if not image_url or image_url.startswith('data:image'):
+                         if img_tag.has_attr('data-src'):
+                              image_url = img_tag['data-src']
+                              
+                    # 3. Ako i dalje nemamo dobar link, povlačimo standardni 'src'
+                    if not image_url or image_url.startswith('data:image'):
+                         if img_tag.has_attr('src'):
+                              image_url = img_tag['src']
+                              
+                    # Očisti ako je neki krivi format i dalje ostao (npr. prazan SVG kod)
+                    if image_url.startswith('data:image'):
+                        image_url = ""
+                # ------------------------------------------------
                 
                 # Cijena
                 e, c = item.select_one('span.big'), item.select_one('span.small_price')
                 price = f"{e.text.strip()},{c.text.strip()}" if e and c else ""
                 
                 if title and price:
-                    # Ista struktura: Naslov, Cijena, URL_Proizvoda, URL_Slike, Stanje_Medija, Stanje_Omota, Tip_Artikla
                     all_products.append([
                         title, price, product_url, image_url, s_medija, s_omota, "Rabljeno"
                     ])
             except Exception as e:
                 continue
                 
-        print(f"Stranica {page} obrađena. Uhvaćeno: {len(all_products)} ploča.")
+        print(f"Stranica {page} obrađena. Uhvaćeno ukupno: {len(all_products)} ploča.")
         page += 1
         time.sleep(2)
         
