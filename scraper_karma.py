@@ -5,7 +5,7 @@ import os
 import time
 
 print(f"Trenutna radna mapa: {os.getcwd()}")
-print("KARMA VINIL: Pokrećem 'Dan 0' paginacijski uvoz baze...")
+print("KARMA VINIL: Pokrećem 'Dan 0' paginacijski uvoz baze (64 po stranici)...")
 
 scraper = cloudscraper.create_scraper(
     browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
@@ -20,7 +20,8 @@ page = 1
 zaustavi = False
 
 while not zaustavi:
-    url = f"{base_url}/vinyl-ploce?page={page}"
+    # Ažurirana paginacija s točnim parametrima webshopa
+    url = f"{base_url}/vinyl-ploce?page_size=64&sort=3&page_number={page}&f=1&min_price=1&max_price=1000"
     print(f"Skeniram stranicu {page}...")
     
     try:
@@ -63,12 +64,19 @@ while not zaustavi:
                     
             if not container: continue
                 
-            # 4. SLIKA
+            # 4. SLIKA (Anti-Lazyload sustav)
             image_url = ""
             img_tag = container.find('img')
-            if img_tag and img_tag.has_attr('src'):
-                img_src = img_tag['src']
-                image_url = base_url + img_src if not img_src.startswith('http') else img_src
+            if img_tag:
+                img_src = ""
+                # Tražimo stvarne linkove skrivene lazyloadom
+                if img_tag.has_attr('data-src'): img_src = img_tag['data-src']
+                elif img_tag.has_attr('data-original'): img_src = img_tag['data-original']
+                elif img_tag.has_attr('src'): img_src = img_tag['src']
+                
+                # Ignoriramo placeholdere
+                if img_src and not img_src.startswith('data:image') and 'placeholder' not in img_src.lower():
+                    image_url = base_url + img_src if not img_src.startswith('http') else img_src
                 
             # 5. CIJENA
             price = ""
@@ -78,7 +86,7 @@ while not zaustavi:
                 if strong: price = strong.text.replace('€', '').replace(',', '.').strip()
                 else: price = price_span.text.replace('€', '').replace(',', '.').strip()
                     
-            # 6. STANJE OMOTA I MEDIJA (iz tvog HTML-a: <div class="value text-right" title="EX/EX">EX/EX</div>)
+            # 6. STANJE OMOTA I MEDIJA
             stanje_medija = "Rabljeno"
             stanje_omota = "Rabljeno"
             
