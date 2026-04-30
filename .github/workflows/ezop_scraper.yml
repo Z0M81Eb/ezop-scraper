@@ -21,6 +21,13 @@ jobs:
     - name: Instaliraj alate
       run: pip install -r requirements.txt
 
+    - name: Dijagnostika - Provjera datoteka
+      run: |
+        echo "Trenutna radna mapa:"
+        pwd
+        echo "Popis svih preuzetih datoteka s GitHuba:"
+        ls -la
+
     - name: Pokreni scraper
       run: python scraper_ezop.py
 
