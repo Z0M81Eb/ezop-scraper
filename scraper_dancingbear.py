@@ -1,8 +1,13 @@
 import cloudscraper
 from bs4 import BeautifulSoup
+import warnings
+from bs4 import XMLParsedAsHTMLWarning
 import csv
 import os
 import time
+
+# Ušutkavamo iritantno upozorenje za XML jer html.parser sasvim dobro čita sitemap
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 scraper = cloudscraper.create_scraper(
     browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
@@ -13,7 +18,6 @@ csv_filename = 'dancingbear_ploce.csv'
 # === 1. UČITAJ STARU BAZU ===
 old_data = {}
 print(f"Trenutna radna mapa: {os.getcwd()}")
-print(f"Datoteke u mapi: {os.listdir('.')}")
 
 if os.path.exists(csv_filename):
     with open(csv_filename, 'r', encoding='utf-8') as f:
@@ -21,20 +25,18 @@ if os.path.exists(csv_filename):
         header = next(reader, None)
         for row in reader:
             if len(row) >= 7:
-                # URL je na indeksu 2
                 old_data[row[2]] = row
 
 print(f"Učitano {len(old_data)} starih ploča iz memorije.")
 
 # === 2. BRZO ČIŠĆENJE (SITEMAP) ===
-# Koristimo sitemap isključivo kao radar da vidimo je li neka naša stara ploča izbrisana
 print("Skeniram sitemap za provjeru statusa starih ploča...")
 sitemap_urls = set()
 
 def fetch_sitemap(url):
     try:
         res = scraper.get(url, timeout=30)
-        soup = BeautifulSoup(res.text, 'xml')
+        soup = BeautifulSoup(res.text, 'html.parser')
         sitemaps = soup.find_all('sitemap')
         if sitemaps:
             for sm in sitemaps:
@@ -53,12 +55,16 @@ def fetch_sitemap(url):
 
 fetch_sitemap('https://dancingbear.hr/wp-sitemap.xml')
 
+# --- SIGURNOSNA KOČNICA PROTIV BRISANJA BAZE ---
 azurirani_podaci_dict = {}
-for stara_url, stari_red in old_data.items():
-    if stara_url in sitemap_urls:
-        azurirani_podaci_dict[stara_url] = stari_red
-
-print(f"Zadržano {len(azurirani_podaci_dict)} aktivnih ploča. (Obrisano {len(old_data) - len(azurirani_podaci_dict)} povučenih iz prodaje).")
+if len(sitemap_urls) > 1000:
+    for stara_url, stari_red in old_data.items():
+        if stara_url in sitemap_urls:
+            azurirani_podaci_dict[stara_url] = stari_red
+    print(f"Zadržano {len(azurirani_podaci_dict)} aktivnih ploča. (Obrisano {len(old_data) - len(azurirani_podaci_dict)} povučenih iz prodaje).")
+else:
+    print(f"SIGURNOSNO UPOZORENJE: Nešto nije u redu sa sitemapom, izvučeno je samo {len(sitemap_urls)} linkova. Zbog sigurnosti preskačem brisanje starih ploča!")
+    azurirani_podaci_dict = old_data.copy()
 
 # === 3. PAMETNO SKENIRANJE NOVIH PLOČA (KATEGORIJA VINYL) ===
 print("\nKrećem u pametno traženje noviteta preko kategorije Vinyl (Zaobilazim CD-ove!)...")
@@ -67,7 +73,6 @@ zaustavi = False
 novih_ploca = []
 
 while not zaustavi:
-    # Uvijek forsiramo sortiranje od najnovijeg (?orderby=date)
     cat_url = 'https://dancingbear.hr/kategorija-proizvoda/vinyl/?orderby=date' if page == 1 else f'https://dancingbear.hr/kategorija-proizvoda/vinyl/page/{page}/?orderby=date'
     print(f"Pregledavam stranicu noviteta {page}...")
     
@@ -76,12 +81,10 @@ while not zaustavi:
         if res.status_code == 404: break
         
         soup = BeautifulSoup(res.text, 'html.parser')
-        
-        # Pronalazimo sve proizvode na stranici
         products = soup.find_all('li', class_='product')
         if not products: break
         
-        novih_na_stranici = 0
+        starih_na_stranici = 0
         
         for prod in products:
             a_tag = prod.find('a', class_='woocommerce-LoopProduct-link') or prod.find('a')
@@ -89,11 +92,15 @@ while not zaustavi:
             
             link = a_tag['href']
             
-            # KOČNICA: Ako URL ove ploče već imamo u ažuriranoj listi starih ploča, preskačemo ju!
+            # FILTAR: Blokiramo generičke kategorijske linkove, uzimamo samo stvarne proizvode
+            if '/trgovina/' not in link and '/proizvod/' not in link:
+                continue
+            
+            # KOČNICA: Ako smo naišli na ploču koju već imamo, dodajemo je u brojač i preskačemo detekciju
             if link in azurirani_podaci_dict:
+                starih_na_stranici += 1
                 continue
                 
-            # --- Ako smo došli ovdje, ploča je potpuno NOVA. Posjećujemo ju. ---
             print(f" -> Nova ploča detektirana, provjeravam detalje: {link}")
             
             try:
@@ -101,7 +108,6 @@ while not zaustavi:
                 if prod_res.status_code != 200: continue
                 prod_soup = BeautifulSoup(prod_res.text, 'html.parser')
                 
-                # Zaliha
                 if prod_soup.find(class_='out-of-stock'):
                     print("   - Rasprodano, preskačem.")
                     continue
@@ -109,13 +115,17 @@ while not zaustavi:
                 title_el = prod_soup.find('h1', class_='product_title')
                 full_title = title_el.text.strip() if title_el else ""
                 
+                # Prilagođeno hvatanje cijene
                 price = ""
                 price_el = prod_soup.find('p', class_='price')
                 if price_el:
                     ins = price_el.find('ins')
-                    if ins: price_el = ins
-                    bdi = price_el.find('bdi')
-                    if bdi: price = bdi.text.replace('€', '').replace('\xa0', '').strip()
+                    target = ins if ins else price_el
+                    bdi = target.find('bdi')
+                    if bdi: 
+                        price = bdi.text.replace('€', '').replace('\xa0', '').strip()
+                    else:
+                        price = target.text.replace('€', '').replace('\xa0', '').strip()
                     
                 image_url = ""
                 img_wrap = prod_soup.find('div', class_='woocommerce-product-gallery__image')
@@ -128,16 +138,17 @@ while not zaustavi:
                 
                 if full_title and price:
                     novih_ploca.append([full_title, price, link, image_url, "Sealed", "Sealed", "Novo"])
-                    novih_na_stranici += 1
                     print(f"   - USPJEH: {full_title} dodan u bazu!")
+                else:
+                    print("   - Fali cijena ili naslov, preskačem.")
                     
                 time.sleep(1)
             except Exception as e:
                 print(f"   - Greška na linku ploče: {e}")
                 
-        # Ako na cijeloj stranici nismo dodali nijednu novu ploču (sve na stranici su već u bazi), GOTOVI SMO!
-        if novih_na_stranici == 0:
-            print("\nNaišli smo na stare ploče. Nema više noviteta! Prekidam skeniranje.")
+        # NOVA PAMETNA LOGIKA PREKIDA: Znamo da smo gotovi tek kada na stranici ugledamo stare ploče
+        if starih_na_stranici > 0:
+            print(f"\nNaišli smo na stare ploče (pronađeno {starih_na_stranici} starih na ovoj stranici). Nema više noviteta! Prekidam skeniranje.")
             zaustavi = True
             break
             
