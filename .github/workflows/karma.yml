@@ -1,0 +1,35 @@
+name: Karma Vinil Scraper
+
+on:
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Preuzimanje koda
+      uses: actions/checkout@v4
+
+    - name: Instalacija Pythona
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Instalacija alata
+      run: |
+        pip install cloudscraper beautifulsoup4
+
+    - name: Pokretanje robota
+      run: python -u scraper_karma.py
+
+    - name: Spremanje CSV-a natrag u repozitorij
+      run: |
+        git config --global user.name 'GitHub Action'
+        git config --global user.email 'action@github.com'
+        git add karma_ploce.csv
+        git commit -m "Inicijalni Karma Vinil uvoz" || exit 0
+        git pull --rebase origin main
+        git push
