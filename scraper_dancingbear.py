@@ -112,20 +112,31 @@ while not zaustavi:
                     print("   - Rasprodano, preskačem.")
                     continue
                     
+                # --- PAMETNIJE HVATANJE NASLOVA ---
                 title_el = prod_soup.find('h1', class_='product_title')
+                if not title_el: 
+                    title_el = prod_soup.find('h1')
                 full_title = title_el.text.strip() if title_el else ""
                 
-                # Prilagođeno hvatanje cijene
+                # --- PAMETNIJE HVATANJE CIJENE ---
                 price = ""
-                price_el = prod_soup.find('p', class_='price')
+                price_el = prod_soup.find(class_='price') 
+                
                 if price_el:
                     ins = price_el.find('ins')
                     target = ins if ins else price_el
                     bdi = target.find('bdi')
+                    
                     if bdi: 
                         price = bdi.text.replace('€', '').replace('\xa0', '').strip()
                     else:
                         price = target.text.replace('€', '').replace('\xa0', '').strip()
+                else:
+                    summary = prod_soup.find('div', class_='summary')
+                    if summary:
+                        bdi = summary.find('bdi')
+                        if bdi: 
+                            price = bdi.text.replace('€', '').replace('\xa0', '').strip()
                     
                 image_url = ""
                 img_wrap = prod_soup.find('div', class_='woocommerce-product-gallery__image')
@@ -140,13 +151,13 @@ while not zaustavi:
                     novih_ploca.append([full_title, price, link, image_url, "Sealed", "Sealed", "Novo"])
                     print(f"   - USPJEH: {full_title} dodan u bazu!")
                 else:
-                    print("   - Fali cijena ili naslov, preskačem.")
+                    print(f"   - Greška strukture HTML-a! Iščitano -> Naslov: '{full_title}' | Cijena: '{price}'")
                     
                 time.sleep(1)
             except Exception as e:
                 print(f"   - Greška na linku ploče: {e}")
                 
-        # NOVA PAMETNA LOGIKA PREKIDA: Znamo da smo gotovi tek kada na stranici ugledamo stare ploče
+        # NOVA PAMETNA LOGIKA PREKIDA
         if starih_na_stranici > 0:
             print(f"\nNaišli smo na stare ploče (pronađeno {starih_na_stranici} starih na ovoj stranici). Nema više noviteta! Prekidam skeniranje.")
             zaustavi = True
