@@ -12,6 +12,12 @@ csv_filename = 'dancingbear_ploce.csv'
 
 # === 1. UČITAJ STARU BAZU (Ako postoji) ===
 old_data = {}
+
+# --- DODANO: Provjera radne mape i datoteka za GitHub Actions ---
+print(f"Trenutna radna mapa: {os.getcwd()}")
+print(f"Datoteke u mapi: {os.listdir('.')}")
+# ----------------------------------------------------------------
+
 if os.path.exists(csv_filename):
     with open(csv_filename, 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
