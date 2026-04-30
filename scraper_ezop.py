@@ -45,7 +45,8 @@ sitemap_urls = set()
 
 try:
     res = scraper.get('https://ezop-antikvarijat.hr/sitemap_index.xml', timeout=30)
-    soup = BeautifulSoup(res.text, 'html.parser')
+    # ISPRAVAK: Koristimo brzi 'xml' parser umjesto html-a
+    soup = BeautifulSoup(res.content, 'xml')
     
     # Nalazimo samo linkove koji u sebi imaju 'product-sitemap'
     product_sitemaps = [loc.text for loc in soup.find_all('loc') if 'product-sitemap' in loc.text]
@@ -53,7 +54,8 @@ try:
 
     for i, ps_url in enumerate(product_sitemaps):
         ps_res = scraper.get(ps_url, timeout=30)
-        ps_soup = BeautifulSoup(ps_res.text, 'html.parser')
+        # ISPRAVAK: Koristimo brzi 'xml' parser
+        ps_soup = BeautifulSoup(ps_res.content, 'xml')
         for loc in ps_soup.find_all('loc'):
             sitemap_urls.add(loc.text)
         print(f" -> Sitemap {i+1}/{len(product_sitemaps)} obrađen.")
@@ -85,6 +87,7 @@ if len(novi_linkovi) > 0:
             response = scraper.get(link, timeout=15)
             if response.status_code != 200: continue
             
+            # ISPRAVAK: Za obične stranice webshopa ostaje 'html.parser'
             soup = BeautifulSoup(response.text, 'html.parser')
             
             # PROVJERA ZALIHE
