@@ -10,13 +10,10 @@ scraper = cloudscraper.create_scraper(
 
 csv_filename = 'dancingbear_ploce.csv'
 
-# === 1. UČITAJ STARU BAZU (Ako postoji) ===
+# === 1. UČITAJ STARU BAZU ===
 old_data = {}
-
-# --- DODANO: Provjera radne mape i datoteka za GitHub Actions ---
 print(f"Trenutna radna mapa: {os.getcwd()}")
 print(f"Datoteke u mapi: {os.listdir('.')}")
-# ----------------------------------------------------------------
 
 if os.path.exists(csv_filename):
     with open(csv_filename, 'r', encoding='utf-8') as f:
@@ -24,19 +21,20 @@ if os.path.exists(csv_filename):
         header = next(reader, None)
         for row in reader:
             if len(row) >= 7:
+                # URL je na indeksu 2
                 old_data[row[2]] = row
 
 print(f"Učitano {len(old_data)} starih ploča iz memorije.")
 
-# === 2. POVUCI SITEMAP (Svi aktivni proizvodi) ===
-print("Skeniram Dancing Bear sitemap (ovo traje par sekundi)...")
+# === 2. BRZO ČIŠĆENJE (SITEMAP) ===
+# Koristimo sitemap isključivo kao radar da vidimo je li neka naša stara ploča izbrisana
+print("Skeniram sitemap za provjeru statusa starih ploča...")
 sitemap_urls = set()
 
 def fetch_sitemap(url):
     try:
         res = scraper.get(url, timeout=30)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        
+        soup = BeautifulSoup(res.text, 'xml')
         sitemaps = soup.find_all('sitemap')
         if sitemaps:
             for sm in sitemaps:
@@ -51,94 +49,110 @@ def fetch_sitemap(url):
                     if '/trgovina/' in loc.text or '/proizvod/' in loc.text:
                         sitemap_urls.add(loc.text)
     except Exception as e:
-        print(f"Greška pri čitanju sitemapa: {e}")
+        print(f"Greška sitemapa: {e}")
 
 fetch_sitemap('https://dancingbear.hr/wp-sitemap.xml')
 
-print(f"Na cijelom webshopu u sitemapu je ukupno {len(sitemap_urls)} linkova.")
+azurirani_podaci_dict = {}
+for stara_url, stari_red in old_data.items():
+    if stara_url in sitemap_urls:
+        azurirani_podaci_dict[stara_url] = stari_red
 
-# === 3. DELTA USPOREDBA ===
-azurirani_podaci = []
-novi_linkovi = []
+print(f"Zadržano {len(azurirani_podaci_dict)} aktivnih ploča. (Obrisano {len(old_data) - len(azurirani_podaci_dict)} povučenih iz prodaje).")
 
-for surl in sitemap_urls:
-    if surl in old_data:
-        azurirani_podaci.append(old_data[surl])
-    else:
-        novi_linkovi.append(surl)
+# === 3. PAMETNO SKENIRANJE NOVIH PLOČA (KATEGORIJA VINYL) ===
+print("\nKrećem u pametno traženje noviteta preko kategorije Vinyl (Zaobilazim CD-ove!)...")
+page = 1
+zaustavi = False
+novih_ploca = []
 
-print(f"Zadržano ploča: {len(azurirani_podaci)} (Obrisano onih kojih više nema u prodaji).")
-print(f"Pronađeno NOVIH proizvoda za provjeru: {len(novi_linkovi)}.")
-
-# === 4. SKENIRANJE SAMO NOVIH ARTIKALA SA ZAŠTITOM ===
-if len(novi_linkovi) > 0:
-    print("\nKrećem u skeniranje detalja samo za nove proizvode...")
-    for i, link in enumerate(novi_linkovi):
-        print(f"Provjeravam novi URL ({i+1}/{len(novi_linkovi)}): {link}")
-        try:
-            res = scraper.get(link, timeout=15)
-            if res.status_code != 200: continue
+while not zaustavi:
+    # Uvijek forsiramo sortiranje od najnovijeg (?orderby=date)
+    cat_url = 'https://dancingbear.hr/kategorija-proizvoda/vinyl/?orderby=date' if page == 1 else f'https://dancingbear.hr/kategorija-proizvoda/vinyl/page/{page}/?orderby=date'
+    print(f"Pregledavam stranicu noviteta {page}...")
+    
+    try:
+        res = scraper.get(cat_url, timeout=15)
+        if res.status_code == 404: break
+        
+        soup = BeautifulSoup(res.text, 'html.parser')
+        
+        # Pronalazimo sve proizvode na stranici
+        products = soup.find_all('li', class_='product')
+        if not products: break
+        
+        novih_na_stranici = 0
+        
+        for prod in products:
+            a_tag = prod.find('a', class_='woocommerce-LoopProduct-link') or prod.find('a')
+            if not a_tag or not a_tag.has_attr('href'): continue
             
-            soup = BeautifulSoup(res.text, 'html.parser')
+            link = a_tag['href']
             
-            # --- NOVO: PROVJERA ZALIHE ---
-            # WooCommerce na elemente dodaje klasu 'out-of-stock' ako artikla nema
-            out_of_stock = soup.find(class_='out-of-stock')
-            if out_of_stock:
-                print(" -> Preskačem, nema na zalihi (Out of stock).")
+            # KOČNICA: Ako URL ove ploče već imamo u ažuriranoj listi starih ploča, preskačemo ju!
+            if link in azurirani_podaci_dict:
                 continue
-            # -----------------------------
-            
-            # FILTAR: Provjeravamo je li ovo Vinil kroz breadcrumb i kategorije
-            kategorije = ""
-            bc = soup.find('nav', class_='woocommerce-breadcrumb')
-            if bc: kategorije += bc.text.lower()
-            cat_span = soup.find('span', class_='posted_in')
-            if cat_span: kategorije += cat_span.text.lower()
-            
-            if 'vinyl' not in kategorije and 'vinil' not in kategorije and 'lp' not in kategorije:
-                print(" -> Preskačem, nije vinil.")
-                continue 
                 
-            # Naslov
-            title_el = soup.find('h1', class_='product_title')
-            full_title = title_el.text.strip() if title_el else ""
+            # --- Ako smo došli ovdje, ploča je potpuno NOVA. Posjećujemo ju. ---
+            print(f" -> Nova ploča detektirana, provjeravam detalje: {link}")
             
-            # Cijena
-            price = ""
-            price_el = soup.find('p', class_='price')
-            if price_el:
-                ins = price_el.find('ins')
-                if ins: price_el = ins
-                bdi = price_el.find('bdi')
-                if bdi: price = bdi.text.replace('€', '').replace('\xa0', '').strip()
+            try:
+                prod_res = scraper.get(link, timeout=15)
+                if prod_res.status_code != 200: continue
+                prod_soup = BeautifulSoup(prod_res.text, 'html.parser')
                 
-            # Slika s pojedinačne WooCommerce stranice proizvoda
-            image_url = ""
-            img_wrap = soup.find('div', class_='woocommerce-product-gallery__image')
-            if img_wrap:
-                a_tag = img_wrap.find('a')
-                if a_tag and a_tag.has_attr('href'):
-                    image_url = a_tag['href']
-                else:
-                    img_tag = img_wrap.find('img')
-                    if img_tag and img_tag.has_attr('src'):
-                        image_url = img_tag['src']
+                # Zaliha
+                if prod_soup.find(class_='out-of-stock'):
+                    print("   - Rasprodano, preskačem.")
+                    continue
+                    
+                title_el = prod_soup.find('h1', class_='product_title')
+                full_title = title_el.text.strip() if title_el else ""
+                
+                price = ""
+                price_el = prod_soup.find('p', class_='price')
+                if price_el:
+                    ins = price_el.find('ins')
+                    if ins: price_el = ins
+                    bdi = price_el.find('bdi')
+                    if bdi: price = bdi.text.replace('€', '').replace('\xa0', '').strip()
+                    
+                image_url = ""
+                img_wrap = prod_soup.find('div', class_='woocommerce-product-gallery__image')
+                if img_wrap:
+                    img_a = img_wrap.find('a')
+                    if img_a and img_a.has_attr('href'): image_url = img_a['href']
+                    else:
+                        img_tag = img_wrap.find('img')
+                        if img_tag and img_tag.has_attr('src'): image_url = img_tag['src']
+                
+                if full_title and price:
+                    novih_ploca.append([full_title, price, link, image_url, "Sealed", "Sealed", "Novo"])
+                    novih_na_stranici += 1
+                    print(f"   - USPJEH: {full_title} dodan u bazu!")
+                    
+                time.sleep(1)
+            except Exception as e:
+                print(f"   - Greška na linku ploče: {e}")
+                
+        # Ako na cijeloj stranici nismo dodali nijednu novu ploču (sve na stranici su već u bazi), GOTOVI SMO!
+        if novih_na_stranici == 0:
+            print("\nNaišli smo na stare ploče. Nema više noviteta! Prekidam skeniranje.")
+            zaustavi = True
+            break
             
-            if full_title and price:
-                azurirani_podaci.append([full_title, price, link, image_url, "Sealed", "Sealed", "Novo"])
-                print(f" -> USPJEH: {full_title}")
-                
-            time.sleep(1) 
-        except Exception as e:
-            print(f"Greška na pojedinačnom linku: {e}")
-else:
-    print("\nNema novih proizvoda za dodavanje. Sve je već usklađeno!")
+        page += 1
+        time.sleep(1)
+    except Exception as e:
+        print(f"Greška na kategoriji: {e}")
+        break
 
-# === 5. ZAVRŠNO SPREMANJE ===
+# === 4. SPAJANJE I SPREMANJE ===
+konacna_baza = novih_ploca + list(azurirani_podaci_dict.values())
+
 with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
     writer = csv.writer(f)
     writer.writerow(['Naslov', 'Cijena', 'URL_Proizvoda', 'URL_Slike', 'Stanje_Medija', 'Stanje_Omota', 'Tip_Artikla'])
-    writer.writerows(azurirani_podaci)
+    writer.writerows(konacna_baza)
 
-print("\nDELTA SUSTAV: Skeniranje uspješno dovršeno! CSV je spreman.")
+print(f"\nGOTOVO! Sustav ažuriran. Nova veličina baze: {len(konacna_baza)} ploča (Dodano {len(novih_ploca)} novih).")
