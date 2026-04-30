@@ -1,6 +1,7 @@
 import cloudscraper
 from bs4 import BeautifulSoup
 import csv
+import os
 import time
 
 def pretvori_ocjenu(ezop_ocjena):
@@ -19,101 +20,136 @@ scraper = cloudscraper.create_scraper(
     browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
 )
 
-all_products = []
-page = 1
+csv_filename = 'ezop_ploce.csv'
+old_data = {}
 
-while True:
-    url = 'https://ezop-antikvarijat.hr/kategorija/glazba/' if page == 1 else f'https://ezop-antikvarijat.hr/kategorija/glazba/page/{page}/'
-    print(f"Skeniram Ezop stranicu {page}...")
+# --- DIJAGNOSTIKA ZA GITHUB ACTIONS ---
+print(f"Trenutna radna mapa: {os.getcwd()}")
+print(f"Datoteke u mapi: {os.listdir('.')}")
+# --------------------------------------
+
+# === 1. UČITAJ STARU BAZU (Ako postoji) ===
+if os.path.exists(csv_filename):
+    with open(csv_filename, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        header = next(reader, None)
+        for row in reader:
+            if len(row) >= 7:
+                old_data[row[2]] = row
+
+print(f"Učitano {len(old_data)} starih ploča iz memorije.")
+
+# === 2. POVUCI SITEMAP (Glavni indeks + Pod-sitemapi) ===
+print("Skeniram glavni Ezop sitemap_index.xml...")
+sitemap_urls = set()
+
+try:
+    res = scraper.get('https://ezop-antikvarijat.hr/sitemap_index.xml', timeout=30)
+    soup = BeautifulSoup(res.text, 'html.parser')
     
-    try:
-        response = scraper.get(url, timeout=30)
-        if response.status_code == 404: break
-            
-        soup = BeautifulSoup(response.text, 'html.parser')
-        items = soup.select('div.arhiva-all-info')
-        if len(items) == 0: break
-            
-        for item in items:
-            try:
-                is_vinyl = False
-                s_medija, s_omota = "", ""
-                
-                info_list = item.select('ul.arhiva-cf li')
-                for li in info_list:
-                    t = li.text.lower()
-                    if "medij" in t and "gramofon" in t: is_vinyl = True
-                    if "stanje omota" in t:
-                        span = li.select_one('span.red')
-                        if span: s_omota = pretvori_ocjenu(span.text.strip())
-                    if "stanje medija" in t:
-                        span = li.select_one('span.red')
-                        if span: s_medija = pretvori_ocjenu(span.text.strip())
-                
-                if not is_vinyl: continue
+    # Nalazimo samo linkove koji u sebi imaju 'product-sitemap'
+    product_sitemaps = [loc.text for loc in soup.find_all('loc') if 'product-sitemap' in loc.text]
+    print(f"Pronađeno {len(product_sitemaps)} pod-sitemapa s proizvodima. Krećem u izvlačenje linkova...")
 
-                art_el = item.select_one('h2.woocommerce-loop-product__title')
-                alb_el = item.select_one('p.product_author_black')
-                title = f"{art_el.text.strip()} - {alb_el.text.strip()}" if art_el and alb_el else ""
-                
-                a_tag = item.find('a')
-                if not a_tag:
-                    parent_li = item.find_parent('li')
-                    a_tag = parent_li.find('a') if parent_li else None
-                product_url = a_tag['href'] if a_tag and a_tag.has_attr('href') else ""
-                
-                # --- NOVI, PAMETNI SUSTAV ZA SLIKE ---
-                parent_block = item.find_parent('li') or item.find_parent('div') or item.parent
-                
-                # SADA tražimo SVE slike unutar bloka
-                img_tags = parent_block.find_all('img') if parent_block else item.find_all('img')
-                
-                image_url = ""
-                for img in img_tags:
-                    temp_url = ""
-                    
-                    # 1. Gledamo srcset (vučemo najbolju rezoluciju)
-                    if img.has_attr('srcset'):
-                        srcset_links = img['srcset'].split(',')
-                        if srcset_links:
-                            # Uzimamo zadnji link iz niza (jer je u WP-u obično onaj s najvećim 'w' brojem)
-                            temp_url = srcset_links[-1].strip().split(' ')[0]
-                    
-                    # 2. Ako nema srcset, tražimo data-src
-                    if not temp_url and img.has_attr('data-src'):
-                        temp_url = img['data-src']
-                              
-                    # 3. Na kraju gledamo standardni src
-                    if not temp_url and img.has_attr('src'):
-                        temp_url = img['src']
-                              
-                    # PROVJERA: Zanemarujemo base64 i generičke Ezop ikone
-                    if temp_url and not temp_url.startswith('data:image'):
-                        if 'themes/ezop' not in temp_url and 'placeholder' not in temp_url.lower():
-                            image_url = temp_url
-                            break # Našli smo pravu sliku, možemo prekinuti petlju traženja!
-                # ------------------------------------------------
-                
-                # Cijena
-                e, c = item.select_one('span.big'), item.select_one('span.small_price')
-                price = f"{e.text.strip()},{c.text.strip()}" if e and c else ""
-                
-                if title and price:
-                    all_products.append([
-                        title, price, product_url, image_url, s_medija, s_omota, "Rabljeno"
-                    ])
-            except Exception as e:
+    for i, ps_url in enumerate(product_sitemaps):
+        ps_res = scraper.get(ps_url, timeout=30)
+        ps_soup = BeautifulSoup(ps_res.text, 'html.parser')
+        for loc in ps_soup.find_all('loc'):
+            sitemap_urls.add(loc.text)
+        print(f" -> Sitemap {i+1}/{len(product_sitemaps)} obrađen.")
+        
+except Exception as e:
+    print(f"Greška pri čitanju sitemapa: {e}")
+
+print(f"\nUkupno na webshopu u sitemapu pronađeno {len(sitemap_urls)} jedinstvenih linkova.")
+
+# === 3. DELTA USPOREDBA ===
+azurirani_podaci = []
+novi_linkovi = []
+
+for surl in sitemap_urls:
+    if surl in old_data:
+        azurirani_podaci.append(old_data[surl])
+    else:
+        novi_linkovi.append(surl)
+
+print(f"Zadržano ploča: {len(azurirani_podaci)} (Obrisano onih kojih više nema).")
+print(f"Pronađeno NOVIH proizvoda za provjeru: {len(novi_linkovi)}.")
+
+# === 4. SKENIRANJE SAMO NOVIH ARTIKALA (POJEDINAČNE STRANICE) ===
+if len(novi_linkovi) > 0:
+    print("\nKrećem u skeniranje detalja samo za nove proizvode...")
+    for i, link in enumerate(novi_linkovi):
+        print(f"Provjeravam URL ({i+1}/{len(novi_linkovi)}): {link}")
+        try:
+            response = scraper.get(link, timeout=15)
+            if response.status_code != 200: continue
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # PROVJERA ZALIHE
+            if soup.find(class_='out-of-stock'):
+                print(" -> Preskačem, rasprodano.")
                 continue
                 
-        print(f"Stranica {page} obrađena. Uhvaćeno ukupno: {len(all_products)} ploča.")
-        page += 1
-        time.sleep(2)
-        
-    except Exception as e:
-        break
+            # FILTAR VINILA: Pretražujemo cjelokupni tekst stranice
+            text_lower = soup.get_text().lower()
+            if 'gramofon' not in text_lower and 'vinyl' not in text_lower and 'vinil' not in text_lower and 'lp' not in text_lower:
+                print(" -> Preskačem, nije vinil.")
+                continue
+            
+            # NASLOV
+            title_el = soup.find('h1', class_='product_title')
+            full_title = title_el.text.strip() if title_el else ""
+            
+            # CIJENA
+            price = ""
+            price_el = soup.find('p', class_='price')
+            if price_el:
+                ins = price_el.find('ins')
+                target = ins if ins else price_el
+                bdi = target.find('bdi')
+                if bdi: price = bdi.text.replace('€', '').replace('\xa0', '').strip()
+            
+            # OCJENE: Tražimo crvene spanove unutar stranice
+            s_medija, s_omota = "", ""
+            red_spans = soup.find_all('span', class_='red')
+            for span in red_spans:
+                parent_text = span.parent.text.lower() if span.parent else ""
+                if "stanje omota" in parent_text:
+                    s_omota = pretvori_ocjenu(span.text.strip())
+                elif "stanje medija" in parent_text:
+                    s_medija = pretvori_ocjenu(span.text.strip())
+            
+            # SLIKA (Pametni sustav sa srcset prebačen na galeriju pojedinačne stranice)
+            image_url = ""
+            img_wrap = soup.find('div', class_='woocommerce-product-gallery__image')
+            if img_wrap:
+                img_tag = img_wrap.find('img')
+                if img_tag:
+                    if img_tag.has_attr('srcset'):
+                        srcset_links = img_tag['srcset'].split(',')
+                        if srcset_links:
+                            image_url = srcset_links[-1].strip().split(' ')[0]
+                    if not image_url and img_tag.has_attr('data-src'):
+                        image_url = img_tag['data-src']
+                    if not image_url and img_tag.has_attr('src'):
+                        image_url = img_tag['src']
+            
+            if full_title and price:
+                azurirani_podaci.append([full_title, price, link, image_url, s_medija, s_omota, "Rabljeno"])
+                print(f" -> USPJEH: {full_title} | Medij: {s_medija} | Omot: {s_omota}")
+                
+            time.sleep(1)
+        except Exception as e:
+            print(f"Greška na pojedinačnom linku: {e}")
+else:
+    print("\nNema novih proizvoda za dodavanje. Sve je već usklađeno!")
 
-with open('ezop_ploce.csv', 'w', newline='', encoding='utf-8') as f:
+# === 5. ZAVRŠNO SPREMANJE ===
+with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
     writer = csv.writer(f)
     writer.writerow(['Naslov', 'Cijena', 'URL_Proizvoda', 'URL_Slike', 'Stanje_Medija', 'Stanje_Omota', 'Tip_Artikla'])
-    writer.writerows(all_products)
-    print("Ezop GOTOV!")
+    writer.writerows(azurirani_podaci)
+
+print("\nDELTA SUSTAV: Skeniranje uspješno dovršeno! CSV je spreman.")
