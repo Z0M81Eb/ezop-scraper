@@ -1,0 +1,38 @@
+name: Menart Scraper Dnevni Uvoz
+
+on:
+  schedule:
+    # Pokreće se svaki dan u 03:00 ujutro (UTC)
+    - cron: '0 3 * * *'
+  # Omogućava ručno pokretanje na gumb unutar GitHuba
+  workflow_dispatch:
+
+jobs:
+  scrape-menart:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Preuzimanje repozitorija
+        uses: actions/checkout@v4
+
+      - name: Postavljanje Pythona
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Instalacija potrebnih biblioteka
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4
+
+      - name: Pokretanje Menart Scrapera
+        run: python scraper_menart.py
+
+      - name: Spremanje promjena (Commit i Push)
+        run: |
+          git config --global user.name 'GitHub Action Bot'
+          git config --global user.email 'action@github.com'
+          git add menart_katalog.csv
+          # Ako ima novih promjena u CSV-u, napravi commit, inače preskoči bez bacanja greške
+          git diff --quiet && git diff --staged --quiet || git commit -m "🔄 Automatsko ažuriranje Menart baze"
+          git push
