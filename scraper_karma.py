@@ -86,23 +86,34 @@ while not zaustavi:
                 if strong: price = strong.text.replace('€', '').replace(',', '.').strip()
                 else: price = price_span.text.replace('€', '').replace(',', '.').strip()
                     
-            # 6. STANJE OMOTA I MEDIJA
+            # 6. PAMETNO STANJE OMOTA, MEDIJA I FORMATA
             stanje_medija = "Rabljeno"
             stanje_omota = "Rabljeno"
+            tip_artikla = "Vinil ploča" # Fallback ako ne nađe format
             
-            stanje_div = container.find('div', class_=lambda c: c and 'text-right' in c)
-            if stanje_div:
-                stanje_tekst = stanje_div.text.strip()
-                if '/' in stanje_tekst:
-                    dijelovi = stanje_tekst.split('/')
-                    stanje_medija = dijelovi[0].strip()
-                    stanje_omota = dijelovi[1].strip() if len(dijelovi) > 1 else stanje_medija
-                else:
-                    stanje_medija = stanje_tekst
-                    stanje_omota = stanje_tekst
+            # Skuplja sve divove koji sadrže vrijednosti s desne strane
+            sve_vrijednosti = container.find_all('div', class_=lambda c: c and 'text-right' in c)
+            
+            for div in sve_vrijednosti:
+                tekst = div.text.strip().upper()
+                
+                # Detekcija formata (ako piše LP, 7", 12", 2LP...)
+                if tekst in ['LP', '7"', '12"', '2LP', 'CD', 'MC', '10"']:
+                    tip_artikla = tekst
+                    
+                # Detekcija stanja (sadrži kosu crtu ili je ocjena)
+                elif '/' in tekst or tekst in ['M', 'NM', 'EX', 'VG+', 'VG', 'G', 'F', 'P', 'SS']:
+                    if '/' in tekst:
+                        dijelovi = tekst.split('/')
+                        stanje_medija = dijelovi[0].strip()
+                        stanje_omota = dijelovi[1].strip() if len(dijelovi) > 1 else stanje_medija
+                    else:
+                        stanje_medija = tekst
+                        stanje_omota = tekst
                     
             if title and price:
-                sve_ploce.append([title, price, full_url, image_url, stanje_medija, stanje_omota, "Rabljeno"])
+                # Ovdje smo ubacili tip_artikla na zadnje mjesto umjesto "Rabljeno"
+                sve_ploce.append([title, price, full_url, image_url, stanje_medija, stanje_omota, tip_artikla])
                 
         if novih_na_stranici == 0:
             print("\nDetektirano ponavljanje proizvoda. Došli smo do kraja asortimana. Prekidam!")
