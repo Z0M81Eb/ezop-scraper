@@ -1,0 +1,40 @@
+name: Analogni Zvuk Scraper
+
+on:
+  schedule:
+    # Pokreće se svaki dan u 04:00 po UTC vremenu
+    - cron: '0 4 * * *'
+  workflow_dispatch: # Omogućava ručno pokretanje na gumb "Run workflow"
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repozitorija
+      uses: actions/checkout@v3
+
+    - name: Postavljanje Pythona
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Instalacija potrebnih biblioteka
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests beautifulsoup4
+
+    - name: Pokretanje scrapera
+      run: python scraper_analognizvuk.py
+
+    - name: Commit i Push promjena
+      run: |
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+        git add analognizvuk_ploce.csv
+        # Ako nema promjena, skripta neće baciti error nego će ispisati poruku i nastaviti
+        git commit -m "🤖 Automatsko ažuriranje: Analogni Zvuk (Delta Sync)" || echo "Nema novih promjena za spremanje"
+        git push
