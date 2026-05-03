@@ -1,4 +1,4 @@
-import cloudscraper
+from curl_cffi import requests
 from bs4 import BeautifulSoup
 import csv
 import time
@@ -8,15 +8,6 @@ print("Učitavam biblioteke i pripremam radnike za Analogni Zvuk...", flush=True
 
 csv_filename = 'analognizvuk_ploce.csv'
 konacna_baza = []
-
-# Koristimo cloudscraper za zaobilaženje 403 Forbidden / Cloudflare zaštite
-scraper = cloudscraper.create_scraper(
-    browser={
-        'browser': 'chrome',
-        'platform': 'windows',
-        'desktop': True
-    }
-)
 
 # Konfiguracija WooCommerce filtera i stanja koje ćemo upisati
 filteri = [
@@ -36,7 +27,6 @@ for f in filteri:
     print(f"\n--- Skeniram arhivu: {param.upper()} (Sustav piše: {stanje_kataloga}) ---", flush=True)
 
     while not zaustavi:
-        # Standardna WooCommerce paginacija s GET parametrima za filter
         if page == 1:
             cat_url = f'https://analogni-zvuk.hr/product-category/gramofonske-ploce/?filter_stanje={param}'
         else:
@@ -44,9 +34,10 @@ for f in filteri:
         
         try:
             print(f"Stranica {page}...", end=" ", flush=True)
-            res = scraper.get(cat_url, timeout=15)
             
-            # Provjera kraja
+            # Savršena Chrome imitacija koja probija SSL Handshake grešku
+            res = requests.get(cat_url, impersonate="chrome110", timeout=15)
+            
             if res.status_code == 404:
                 print(f"-> Kraj arhive za ovaj filter.", flush=True)
                 break
