@@ -1,4 +1,4 @@
-import requests
+import cloudscraper
 from bs4 import BeautifulSoup
 import csv
 import time
@@ -9,13 +9,14 @@ print("Učitavam biblioteke i pripremam radnike za Analogni Zvuk...", flush=True
 csv_filename = 'analognizvuk_ploce.csv'
 konacna_baza = []
 
-# Maska Chrome preglednika
-session = requests.Session()
-session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-    'Accept-Language': 'hr,en-US;q=0.7,en;q=0.3'
-})
+# Koristimo cloudscraper za zaobilaženje 403 Forbidden / Cloudflare zaštite
+scraper = cloudscraper.create_scraper(
+    browser={
+        'browser': 'chrome',
+        'platform': 'windows',
+        'desktop': True
+    }
+)
 
 # Konfiguracija WooCommerce filtera i stanja koje ćemo upisati
 filteri = [
@@ -43,7 +44,7 @@ for f in filteri:
         
         try:
             print(f"Stranica {page}...", end=" ", flush=True)
-            res = session.get(cat_url, timeout=15)
+            res = scraper.get(cat_url, timeout=15)
             
             # Provjera kraja
             if res.status_code == 404:
