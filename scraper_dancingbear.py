@@ -1,51 +1,54 @@
-import cloudscraper
+import requests
 from bs4 import BeautifulSoup
-import warnings
-from bs4 import XMLParsedAsHTMLWarning
 import csv
 import time
+import os
 
-# Ušutkavamo upozorenja parsera
-warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
-
-# Cloudscraper simulira stvarni Chrome preglednik kako nas ne bi blokirali
-scraper = cloudscraper.create_scraper(
-    browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
-)
+print("Učitavam biblioteke i pripremam radnike...", flush=True)
 
 csv_filename = 'dancingbear_ploce.csv'
 konacna_baza = []
 page = 1
 zaustavi = False
 
-print("\n=== POKREĆEM GRID SWEEP (SIGURNO SKENIRANJE KATALOGA) ===")
-print("Ovaj proces ignorira rasprodane artikle u startu i ne opterećuje server.\n")
+# Umjesto nestabilnog cloudscrapera, koristimo brzi 'requests' s maskom pravog Chrome preglednika
+session = requests.Session()
+session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'hr,en-US;q=0.7,en;q=0.3'
+})
+
+print("\n=== POKREĆEM GRID SWEEP (SIGURNO SKENIRANJE KATALOGA) ===", flush=True)
+print("Ovaj proces ignorira rasprodane artikle u startu i ne opterećuje server.\n", flush=True)
 
 while not zaustavi:
-    # WooCommerce standardna paginacija arhive
     cat_url = 'https://dancingbear.hr/kategorija-proizvoda/vinyl/' if page == 1 else f'https://dancingbear.hr/kategorija-proizvoda/vinyl/page/{page}/'
     
     try:
-        res = scraper.get(cat_url, timeout=15)
+        print(f"Skeniram: {cat_url} ...", end=" ", flush=True)
+        res = session.get(cat_url, timeout=15)
         
-        # Ako webshop vrati 404, znači da smo prešli zadnju stranicu kataloga
         if res.status_code == 404:
-            print(f"\n[INFO] Došli smo do kraja kataloga na stranici {page}.")
+            print(f"\n[INFO] Došli smo do kraja kataloga (Stranica {page} ne postoji).", flush=True)
             break
+        elif res.status_code != 200:
+            print(f" [GREŠKA SERVERA: {res.status_code}]", flush=True)
+            time.sleep(5)
+            page += 1
+            continue
             
         soup = BeautifulSoup(res.text, 'html.parser')
-        
-        # Nalazimo sve "kartice" proizvoda na trenutnoj stranici
         products = soup.find_all('li', class_='product')
         
         if not products:
-            print(f"\n[INFO] Stranica {page} nema proizvoda. Završavam skeniranje.")
+            print(f"\n[INFO] Stranica {page} nema proizvoda. Završavam skeniranje.", flush=True)
             break
             
         dodano_na_stranici = 0
         
         for prod in products:
-            # 1. KONTROLA ZALIHE: Ako kartica ima klasu 'outofstock', apsolutno je ignoriramo!
+            # 1. KONTROLA ZALIHE
             klase = prod.get('class', [])
             if 'outofstock' in klase:
                 continue
@@ -53,7 +56,7 @@ while not zaustavi:
             # 2. DOHVAT LINKA
             a_tag = prod.find('a', class_='woocommerce-LoopProduct-link')
             if not a_tag:
-                a_tag = prod.find('a') # Fallback ako WooCommerce koristi drugačiju strukturu
+                a_tag = prod.find('a')
                 
             if not a_tag or not a_tag.has_attr('href'):
                 continue
@@ -66,7 +69,6 @@ while not zaustavi:
             
             # 4. DOHVAT SLIKE
             img_el = prod.find('img')
-            # Neki webshopovi koriste data-src za "lazy loading", pa provjeravamo obje opcije
             img_url = ""
             if img_el:
                 if img_el.has_attr('data-src'):
@@ -78,7 +80,6 @@ while not zaustavi:
             price = ""
             price_wrap = prod.find(class_='price')
             if price_wrap:
-                # Ako postoji <ins>, znači da je ploča na akciji. Uzimamo tu (sniženu) cijenu.
                 ins = price_wrap.find('ins')
                 target = ins if ins else price_wrap
                 bdi = target.find('bdi')
@@ -88,32 +89,25 @@ while not zaustavi:
                 else:
                     price = target.text.replace('€', '').replace('\xa0', '').strip()
             
-            # Ako smo uspješno izvukli osnovne podatke, dodajemo u našu "radnu" memoriju
             if title and link and price:
-                # Dancing Bear prodaje isključivo nove ploče, pa unaprijed popunjavamo stanje
                 konacna_baza.append([title, price, link, img_url, "Sealed", "Sealed", "Novo"])
                 dodano_na_stranici += 1
                 
-        print(f"Stranica {page} obrađena -> Dodano aktivnih ploča: {dodano_na_stranici}")
+        print(f"-> Dodano dostupnih: {dodano_na_stranici}", flush=True)
         
         page += 1
-        
-        # SIGURNOSNA KOČNICA: Čekamo 1 sekundu prije iduće stranice kako nas server ne bi detektirao kao napad
-        time.sleep(1)
+        time.sleep(1) # Prisebno pauziramo 1 sekundu
         
     except Exception as e:
-        print(f"\n[GREŠKA] Problem pri obradi stranice {page}: {e}")
-        # Ne prekidamo skriptu, možda je samo privremeni pad veze. Pauziramo duže i nastavljamo na iduću.
+        print(f"\n[GREŠKA] Problem pri obradi stranice {page}: {e}", flush=True)
         time.sleep(5)
         page += 1
 
+print(f"\n=== ZAVRŠENO SKENIRANJE. SPREMAM BAZU ===", flush=True)
 
-# === SPREMANJE SVJEŽE BAZE ===
-print(f"\n=== ZAVRŠENO SKENIRANJE. SPREMAM BAZU ===")
-# Skripta u potpunosti pregazi stari CSV i upisuje isključivo ono što je danas na stanju
 with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
     writer = csv.writer(f)
     writer.writerow(['Naslov', 'Cijena', 'URL_Proizvoda', 'URL_Slike', 'Stanje_Medija', 'Stanje_Omota', 'Tip_Artikla'])
     writer.writerows(konacna_baza)
 
-print(f"Uspješno generiran {csv_filename}. Ukupno spremno za uvoz: {len(konacna_baza)} aktivnih ploča.")
+print(f"Uspješno generiran '{csv_filename}'. Spremljeno {len(konacna_baza)} aktivnih ploča.", flush=True)
