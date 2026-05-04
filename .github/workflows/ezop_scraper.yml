@@ -1,41 +1,39 @@
-name: Ezop Dnevni Scraper
+name: Ezop Antikvarijat Scraper
 
 on:
-  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch: 
+
+permissions:
+  contents: write
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
-    - name: Preuzmi repozitorij
-      uses: actions/checkout@v4
+    - name: Checkout repozitorija
+      uses: actions/checkout@v3
 
-    - name: Postavi Python
-      uses: actions/setup-python@v5
+    - name: Postavljanje Pythona
+      uses: actions/setup-python@v4
       with:
         python-version: '3.10'
 
-    - name: Instaliraj alate
-      run: pip install -r requirements.txt
-
-    - name: Dijagnostika - Provjera datoteka
+    - name: Instalacija potrebnih biblioteka
       run: |
-        echo "Trenutna radna mapa:"
-        pwd
-        echo "Popis svih preuzetih datoteka s GitHuba:"
-        ls -la
+        python -m pip install --upgrade pip
+        pip install cloudscraper beautifulsoup4
 
-    - name: Pokreni scraper
+    - name: Pokretanje scrapera
       run: python scraper_ezop.py
 
-    - name: Pametno spremanje CSV-a i osiguranje od sudara
+    - name: Commit i Push promjena
       run: |
-        git config --global user.name 'GitHub Action'
-        git config --global user.email 'action@github.com'
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
         git add ezop_ploce.csv
-        git commit -m "Ažurirane cijene ploča" || exit 0
+        git commit -m "🤖 Automatsko ažuriranje: Ezop (Smart Sync)" || echo "Nema novih promjena za spremanje"
         git pull --rebase origin main
         git push
