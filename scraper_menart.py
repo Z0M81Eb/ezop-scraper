@@ -1,169 +1,157 @@
 import requests
-from bs4 import BeautifulSoup
 import csv
 import time
-import re
+import html
 
 # --- POSTAVKE ---
-BASE_URL = "https://menartshop.hr/kategorija-proizvoda/glazba/"
+STORE_API_BASE = "https://menartshop.hr/wp-json/wc/store"
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 }
 CSV_FILENAME = "menart_katalog.csv"
 
-def clean_image_url(url):
-    """
-    Menart servira umanjene slike u gridu (npr. slika-200x300.png).
-    Ova funkcija briše te dimenzije kako bismo dobili originalnu 
-    veliku sliku za tvoj webshop (slika.png).
-    """
-    if not url: return ""
-    # Traži i briše -200x300, -150x150 i slično prije ekstenzije
-    return re.sub(r'-\d+x\d+(?=\.[a-zA-Z]+$)', '', url)
-
-def get_lp_filters():
-    """Izviđač: Skenira Menartove filtere sa strane i kupi sve LP formate."""
-    print("🔍 Tražim sve žive 'LP' filtere u njihovom izborniku...", flush=True)
-    
+def get_glazba_category_id(session):
+    """Pronalazi točan ID kategorije 'glazba' kako bismo u startu preskočili igračke i olovke."""
+    print("🔍 Tražim ID kategorije 'Glazba'...", flush=True)
     try:
-        # DODAN TIMEOUT! Bez ovoga skripta beskonačno visi ako server ne odgovori.
-        response = requests.get(BASE_URL, headers=HEADERS, timeout=15)
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        filters = set()
-        for a in soup.find_all('a', href=True):
-            href = a['href']
-            if 'filter_format-glazba=' in href and 'lp' in href.lower():
-                match = re.search(r'filter_format-glazba=([^&]+)', href)
-                if match:
-                    filters.add(match.group(1))
+        url = f"{STORE_API_BASE}/products/categories"
+        res = session.get(url, timeout=15)
+        if res.status_code == 200:
+            for cat in res.json():
+                if cat.get('slug') == 'glazba':
+                    print(f"✅ Kategorija 'Glazba' pronađena (ID: {cat['id']})", flush=True)
+                    return cat['id']
     except Exception as e:
-        print(f"⚠️ Greška pri učitavanju filtera: {e}. Prebacujem se na Plan B.", flush=True)
-        filters = set()
-                
-    # Ako pukne veza ili sakriju kod, ovo je Plan B
-    if not filters:
-        filters = {'2lp-cd-bd-dvd', 'cd-bd-lp', 'cd-dvd-bd-lp', 'lp', 'lp-cd'}
-        
-    print(f"✅ Pronađeni filteri: {', '.join(filters)}", flush=True)
-    return list(filters)
+        print(f"⚠️ Nije uspjelo dohvaćanje kategorija: {e}", flush=True)
+    
+    print("⚠️ Nastavljam bez filtera kategorije (skenirat ću sve i filtrirati ručno).", flush=True)
+    return None
 
-def scrape_menart():
-    filters = get_lp_filters()
+def scrape_menart_api():
     all_products = []
-    seen_urls = set() # Da spriječimo duplikate ako je ploča u više kategorija
+    page = 1
+    per_page = 100 # Vučemo 100 komada odjednom za maksimalnu brzinu
     
     session = requests.Session()
     session.headers.update(HEADERS)
     
-    for fmt in filters:
-        page = 1
-        print(f"\n🚀 Započinjem struganje za format: {fmt}", flush=True)
-        
-        while True:
-            # Konstrukcija URL-a s paginacijom koju si naveo
-            if page == 1:
-                url = f"{BASE_URL}?filter_format-glazba={fmt}"
-            else:
-                url = f"{BASE_URL}page/{page}/?filter_format-glazba={fmt}"
-                
-            print(f"📄 Učitavam stranicu {page}: {url}", flush=True)
-            try:
-                response = session.get(url, timeout=15)
-                # Ako udarimo u zid (nema više stranica), WooCommerce često vraća 404
-                if response.status_code == 404:
-                    break 
-                    
-                soup = BeautifulSoup(response.content, 'html.parser')
-                
-                # Tražimo isključivo h2 naslove s njihovim Tailwind klasama
-                titles = soup.find_all('h2', class_=lambda c: c and 'font-bold' in c and 'text-gray-900' in c)
-                
-                if not titles:
-                    break # Našli smo praznu stranicu, kraj ovog formata
-                    
-                for title_elem in titles:
-                    # Naslovnica (li element) koji drži cijeli taj proizvod
-                    container = title_elem.find_parent('li')
-                    if not container:
-                        container = title_elem.parent.parent
-
-                    # --- KONTROLA ZALIHE ---
-                    # Preskačemo ploču ako WooCommerce kontejner sadrži klasu rasprodanog artikla
-                    if container and 'outofstock' in container.get('class', []):
-                        continue
-                        
-                    # 1. Naslov
-                    naslov = title_elem.text.strip()
-                    
-                    # 2. URL Proizvoda
-                    a_tag = container.find('a', href=True)
-                    link = a_tag['href'] if a_tag else ""
-                    
-                    # Preskačemo ako smo ju već unijeli preko drugog filtera
-                    if link in seen_urls:
-                        continue 
-                        
-                    # 3. Cijena
-                    price_elem = container.find('span', class_='woocommerce-Price-amount')
-                    cijena = ""
-                    if price_elem:
-                        bdi = price_elem.find('bdi')
-                        raw_price = bdi.text if bdi else price_elem.text
-                        # Očisti Menartov &nbsp; i euro znak
-                        cijena = raw_price.replace('\xa0', '').replace('&nbsp;', '').replace('€', '').strip()
-                        
-                    # 4. Slika (Znamo da je img tag unutar containera)
-                    img_elem = container.find('img')
-                    slika_url = ""
-                    if img_elem:
-                        # Lazy load osiguranje
-                        if 'data-src' in img_elem.attrs:
-                            slika_url = img_elem['data-src']
-                        elif 'src' in img_elem.attrs:
-                            slika_url = img_elem['src']
-                        # Brišemo -200x300 iz imena
-                        slika_url = clean_image_url(slika_url)
-                        
-                    # 5. Medij (LP, 2LP, CD+LP...)
-                    medij_elem = container.find('span', class_=lambda c: c and 'text-gray-600' in c and 'ml-3' in c)
-                    medij_tekst = medij_elem.text.strip() if medij_elem else "LP"
-                    
-                    all_products.append({
-                        "Naslov": naslov,
-                        "Cijena": cijena,
-                        "URL_Proizvoda": link,
-                        "URL_Slike": slika_url,
-                        "Stanje_Medija": "Novo",
-                        "Stanje_Omota": "Novo",
-                        "Tip_Artikla": medij_tekst
-                    })
-                    seen_urls.add(link)
-                    
-                # Traženje next gumba. Ako ga nema, petlja se lomi
-                next_page = soup.find('a', class_='next page-numbers')
-                if not next_page:
-                    break 
-                    
-                page += 1
-                time.sleep(1) # Pristojnost da nas ne blokiraju
-                
-            except Exception as e:
-                print(f"❌ Greška na stranici {page}: {e}", flush=True)
+    # Prvo tražimo ID glazbe da preskočimo školski pribor
+    glazba_id = get_glazba_category_id(session)
+    
+    print("\n🚀 Pokrećem brzi API sweep za Menart...", flush=True)
+    
+    while True:
+        # Ako imamo ID kategorije, tražimo samo nju. Ako nemamo, tražimo sve.
+        if glazba_id:
+            url = f"{STORE_API_BASE}/products?category={glazba_id}&page={page}&per_page={per_page}"
+        else:
+            url = f"{STORE_API_BASE}/products?page={page}&per_page={per_page}"
+            
+        try:
+            print(f"📄 Preuzimam API paket {page}...", end=" ", flush=True)
+            res = session.get(url, timeout=20)
+            
+            # Detekcija kraja baze
+            if res.status_code == 400 or res.status_code == 404:
+                print("-> Kraj baze dosegnut.", flush=True)
+                break
+            elif res.status_code != 200:
+                print(f"-> [GREŠKA SERVERA: {res.status_code}]", flush=True)
                 break
                 
+            data = res.json()
+            if not data:
+                print("-> Paket prazan, završavam.", flush=True)
+                break
+                
+            dodano = 0
+            
+            for item in data:
+                # 1. KONTROLA ZALIHE (Sada radi bez greške preko API-ja)
+                if not item.get('is_in_stock', False):
+                    continue
+                    
+                naslov = html.unescape(item.get('name', 'Nepoznat naslov')).strip()
+                
+                # 2. INTELIGENTNO ČITANJE ATRIBUTA (Hvata LP, 2LP, LP+BD...)
+                attributes = item.get('attributes', [])
+                format_ploca = ""
+                je_li_vinil = False
+                
+                for attr in attributes:
+                    attr_name = attr.get('name', '').lower()
+                    if 'format' in attr_name:
+                        terms = attr.get('terms', [])
+                        if terms:
+                            format_val = terms[0].get('name', '')
+                            # Ako vrijednost sadrži LP, vinyl ili single
+                            if 'lp' in format_val.lower() or 'vinyl' in format_val.lower() or 'vinil' in format_val.lower() or 'single' in format_val.lower():
+                                format_ploca = format_val
+                                je_li_vinil = True
+                
+                # Sigurnosni fallback za naslov
+                if not je_li_vinil:
+                    naslov_lower = f" {naslov.lower()} "
+                    if ' lp ' in naslov_lower or '2lp' in naslov_lower or 'vinyl' in naslov_lower or 'vinil' in naslov_lower:
+                        je_li_vinil = True
+                        if not format_ploca:
+                            format_ploca = "LP"
+                            
+                # Ako nije vinil (npr. CD, kazeta ili knjiga), ignoriramo
+                if not je_li_vinil:
+                    continue
+                    
+                if not format_ploca:
+                    format_ploca = "LP"
+
+                # 3. IZVLAČENJE PODATAKA
+                link = item.get('permalink', '')
+                
+                prices = item.get('prices', {})
+                raw_price = prices.get('price', '0')
+                minor_unit = prices.get('currency_minor_unit', 2)
+                try:
+                    price_val = float(raw_price) / (10 ** minor_unit)
+                    cijena = f"{price_val:.2f}"
+                except:
+                    cijena = "0.00"
+                    
+                if cijena == "0.00":
+                    continue
+                    
+                images = item.get('images', [])
+                slika_url = images[0].get('src', '') if images else ""
+                
+                all_products.append({
+                    "Naslov": naslov,
+                    "Cijena": cijena,
+                    "URL_Proizvoda": link,
+                    "URL_Slike": slika_url,
+                    "Stanje_Medija": "Novo",
+                    "Stanje_Omota": "Novo",
+                    "Tip_Artikla": format_ploca
+                })
+                dodano += 1
+                
+            print(f"-> Pronađeno {dodano} aktivnih vinila u paketu.", flush=True)
+            page += 1
+            time.sleep(0.5)
+            
+        except Exception as e:
+            print(f"\n❌ GREŠKA: Konekcija pukla na stranici {page}. Detalji: {e}", flush=True)
+            break
+            
     # --- ZAPISIVANJE U CSV ---
     if all_products:
-        # Poredak usklađen s Agregator standardom
         zaglavlja = ["Naslov", "Cijena", "URL_Proizvoda", "URL_Slike", "Stanje_Medija", "Stanje_Omota", "Tip_Artikla"]
         with open(CSV_FILENAME, mode='w', newline='', encoding='utf-8') as file:
             writer = csv.DictWriter(file, fieldnames=zaglavlja)
             writer.writeheader()
             writer.writerows(all_products)
             
-        print(f"\n🎉 GOTOVO! Uspješno preuzeto {len(all_products)} unikatnih ploča s Menarta.", flush=True)
+        print(f"\n🎉 GOTOVO! API je izvukao {len(all_products)} ploča.", flush=True)
     else:
-        print("⚠️ Nije pronađena niti jedna ploča.", flush=True)
+        print("\n⚠️ Nije pronađena niti jedna ploča.", flush=True)
 
 if __name__ == "__main__":
-    scrape_menart()
+    scrape_menart_api()
