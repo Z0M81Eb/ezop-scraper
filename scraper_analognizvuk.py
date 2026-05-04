@@ -1,131 +1,139 @@
 from playwright.sync_api import sync_playwright
+from playwright_stealth import stealth_sync
+from bs4 import BeautifulSoup
 import csv
 import time
 import re
 
-print("Inicijalizacija hibridnog sustava (In-Page Fetch) za Analogni Zvuk...", flush=True)
+print("Učitavam stealth sustav za struganje HTML-a...", flush=True)
 
 csv_filename = 'analognizvuk_ploce.csv'
 konacna_baza = []
 
+filteri = [
+    {'url_param': 'novo', 'stanje': 'Novo'},
+    {'url_param': 'rabljeno', 'stanje': 'Second Hand'},
+    {'url_param': 'raritet', 'stanje': 'Second Hand'}
+]
+
+print("\n=== POKREĆEM STEALTH HTML SWEEP ===", flush=True)
+
 def run():
     with sync_playwright() as p:
+        # Pokrećemo Chromium
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         page = context.new_page()
+        
+        # Aktivacija stealth moda kako CF ne bi primijetio robota
+        stealth_sync(page)
 
-        print("1. Otvaram naslovnicu kako bih riješio Cloudflare zaštitu...", flush=True)
+        # Rješavamo Cloudflare na naslovnici (prolazimo 202)
+        print("1. Otvaram naslovnicu (Stealth Mode)...", flush=True)
         try:
             page.goto("https://analogni-zvuk.hr/", wait_until="networkidle", timeout=60000)
-            # Produžujemo pauzu na 10 sekundi za sigurnu provjeru
-            print("-> Naslovnica učitana. Čekam 10 sekundi za potpunu CF verifikaciju...", flush=True)
-            time.sleep(10) 
+            print("-> Naslovnica učitana. Maske su postavljene. Čekam 10 sekundi...", flush=True)
+            time.sleep(10)
         except Exception as e:
-            print(f"-> Upozorenje pri učitavanju naslovnice: {e}", flush=True)
+            print(f"-> Upozorenje na naslovnici: {e}", flush=True)
 
-        print("\n2. Pokrećem In-Page API skeniranje unutar provjerenog preglednika...", flush=True)
-
-        page_num = 1
-        while True:
-            api_url = f"https://analogni-zvuk.hr/wp-json/wc/store/products?page={page_num}&per_page=100"
+        for f in filteri:
+            current_page_num = 1
+            zaustavi = False
+            param = f['url_param']
+            stanje_kataloga = f['stanje']
             
-            try:
-                print(f"Skidam stranicu {page_num}...", end=" ", flush=True)
+            print(f"\n--- Skeniram arhivu: {param.upper()} ---", flush=True)
+
+            while not zaustavi:
+                if current_page_num == 1:
+                    cat_url = f'https://analogni-zvuk.hr/product-category/gramofonske-ploce/?filter_stanje={param}'
+                else:
+                    cat_url = f'https://analogni-zvuk.hr/product-category/gramofonske-ploce/page/{current_page_num}/?filter_stanje={param}'
                 
-                # KLJUČNA PROMJENA: JS kod se izvršava unutar samog preglednika
-                # Cloudflare ovo tretira kao legitiman AJAX poziv same stranice
-                js_code = f"""
-                async () => {{
-                    try {{
-                        const response = await fetch('{api_url}');
-                        if (!response.ok) {{
-                            return {{ status: response.status, data: null }};
-                        }}
-                        const data = await response.json();
-                        return {{ status: response.status, data: data }};
-                    }} catch (e) {{
-                        return {{ status: 500, data: null, error: e.toString() }};
-                    }}
-                }}
-                """
-                
-                result = page.evaluate(js_code)
-                status = result.get('status')
-                data = result.get('data')
-                
-                if status == 400:
-                    print("-> Došli smo do kraja baze.", flush=True)
-                    break
-                elif status != 200:
-                    print(f" [GREŠKA SERVERA: {status}]", flush=True)
-                    break
+                try:
+                    print(f"Stranica {current_page_num}...", end=" ", flush=True)
                     
-                if not data:
-                    print("-> Nema više proizvoda.", flush=True)
-                    break
+                    response = page.goto(cat_url, wait_until="networkidle", timeout=45000)
                     
-                dodano_na_stranici = 0
-                
-                for item in data:
-                    # 1. KONTROLA ZALIHE
-                    if not item.get('is_in_stock', False):
+                    if response is None:
+                        print(f" [Nema odgovora]", flush=True)
+                        time.sleep(5)
+                        current_page_num += 1
                         continue
-                        
-                    # 2. KATEGORIJA
-                    kategorije = [kat.get('name', '').lower() for kat in item.get('categories', [])]
-                    if not any('plo' in k or 'vinil' in k or 'vinyl' in k for k in kategorije):
-                        continue
-                        
-                    # 3. OSNOVNI PODACI
-                    title = item.get('name', 'Nepoznat naslov').replace('&#8211;', '-').strip()
-                    link = item.get('permalink', '')
+
+                    if response.status == 404:
+                         print(f"-> Kraj arhive za ovaj filter.", flush=True)
+                         break
+                    elif response.status not in (200, 304):
+                         print(f" [GREŠKA SERVERA: {response.status}]", flush=True)
+                         time.sleep(5)
+                         current_page_num += 1
+                         continue
+
+                    # Ako je 200, stružemo HTML
+                    html_content = page.content()
+                    soup = BeautifulSoup(html_content, 'html.parser')
+                    products = soup.find_all('li', class_='product')
                     
-                    prices = item.get('prices', {})
-                    raw_price = prices.get('price', '0')
-                    minor_unit = prices.get('currency_minor_unit', 2)
-                    try:
-                        price_val = float(raw_price) / (10 ** minor_unit)
-                        price = f"{price_val:.2f}"
-                    except:
-                        price = "0.00"
+                    if not products:
+                        print(f"-> Nema proizvoda na stranici.", flush=True)
+                        break
                         
-                    images = item.get('images', [])
-                    img_url = images[0].get('src', '') if images else ''
+                    dodano_na_stranici = 0
                     
-                    # 4. IZVLAČENJE STANJA
-                    opis = item.get('description', '') + " " + item.get('short_description', '')
-                    opis_clean = re.sub(r'<[^>]+>', ' ', opis)
-                    
-                    stanje_kataloga = "Second Hand"
-                    if "novo" in opis_clean.lower() or "novo" in title.lower():
-                        stanje_kataloga = "Novo"
-                    
-                    stanje_ploce = stanje_kataloga
-                    stanje_omota = stanje_kataloga
-                    
-                    match_ploca = re.search(r'Stanje plo[čc]e:\s*([A-Za-z0-9\+\-\/]+)', opis_clean, re.IGNORECASE)
-                    if match_ploca:
-                        stanje_ploce = match_ploca.group(1).strip()
+                    for prod in products:
+                        klase = prod.get('class', [])
+                        # Ako je prodano, odbacujemo
+                        if 'outofstock' in klase:
+                            continue
+                            
+                        a_tag = prod.find('a', class_='woocommerce-LoopProduct-link')
+                        if not a_tag:
+                            a_tag = prod.find('a')
+                            
+                        if not a_tag or not a_tag.has_attr('href'):
+                            continue
                         
-                    match_omot = re.search(r'Stanje omota:\s*([A-Za-z0-9\+\-\/]+)', opis_clean, re.IGNORECASE)
-                    if match_omot:
-                        stanje_omota = match_omot.group(1).strip()
+                        link = a_tag['href']
                         
-                    if title and link and price != "0.00":
-                        konacna_baza.append([title, price, link, img_url, stanje_ploce, stanje_omota, "Vinil"])
-                        dodano_na_stranici += 1
+                        title_el = prod.find(class_='woocommerce-loop-product__title')
+                        title = title_el.text.replace('&#8211;', '-').strip() if title_el else "Nepoznat naslov"
                         
-                print(f"-> Dodano ploča: {dodano_na_stranici}", flush=True)
-                
-                page_num += 1
-                time.sleep(1) # Prisebna pauza između JS poziva
-                
-            except Exception as e:
-                print(f"\n[GREŠKA] Problem pri obradi: {e}", flush=True)
-                time.sleep(5)
-                page_num += 1
+                        price = ""
+                        price_wrap = prod.find(class_='price')
+                        if price_wrap:
+                            ins = price_wrap.find('ins')
+                            target = ins if ins else price_wrap
+                            bdi = target.find('bdi')
+                            
+                            if bdi:
+                                price = bdi.text.replace('€', '').replace(',', '.').replace('\xa0', '').strip()
+                            else:
+                                price = target.text.replace('€', '').replace(',', '.').replace('\xa0', '').strip()
+                        
+                        img_url = ""
+                        img_el = prod.find('img')
+                        if img_el:
+                            src = img_el.get('data-src') or img_el.get('src')
+                            if src:
+                                img_url = re.sub(r'-\d+x\d+(\.\w+)$', r'\1', src)
+                        
+                        if title and link and price:
+                            konacna_baza.append([title, price, link, img_url, stanje_kataloga, stanje_kataloga, "Vinil"])
+                            dodano_na_stranici += 1
+                            
+                    print(f"-> Dodano: {dodano_na_stranici}", flush=True)
+                    
+                    current_page_num += 1
+                    time.sleep(2) # Malo duža pauza da budemo nevidljivi
+                    
+                except Exception as e:
+                    print(f"\n[GREŠKA] Problem pri obradi HTML-a: {e}", flush=True)
+                    time.sleep(5)
+                    current_page_num += 1
 
         browser.close()
 
