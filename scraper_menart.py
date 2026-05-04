@@ -23,24 +23,29 @@ def clean_image_url(url):
 
 def get_lp_filters():
     """Izviđač: Skenira Menartove filtere sa strane i kupi sve LP formate."""
-    print("🔍 Tražim sve žive 'LP' filtere u njihovom izborniku...")
-    response = requests.get(BASE_URL, headers=HEADERS)
-    soup = BeautifulSoup(response.content, 'html.parser')
+    print("🔍 Tražim sve žive 'LP' filtere u njihovom izborniku...", flush=True)
     
-    filters = set()
-    for a in soup.find_all('a', href=True):
-        href = a['href']
-        if 'filter_format-glazba=' in href and 'lp' in href.lower():
-            # Izvlačimo samo vrijednost filtera (npr. '2lp-cd-bd-dvd')
-            match = re.search(r'filter_format-glazba=([^&]+)', href)
-            if match:
-                filters.add(match.group(1))
+    try:
+        # DODAN TIMEOUT! Bez ovoga skripta beskonačno visi ako server ne odgovori.
+        response = requests.get(BASE_URL, headers=HEADERS, timeout=15)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        filters = set()
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            if 'filter_format-glazba=' in href and 'lp' in href.lower():
+                match = re.search(r'filter_format-glazba=([^&]+)', href)
+                if match:
+                    filters.add(match.group(1))
+    except Exception as e:
+        print(f"⚠️ Greška pri učitavanju filtera: {e}. Prebacujem se na Plan B.", flush=True)
+        filters = set()
                 
-    # Ako ikad sakriju kod, ovo je Plan B
+    # Ako pukne veza ili sakriju kod, ovo je Plan B
     if not filters:
         filters = {'2lp-cd-bd-dvd', 'cd-bd-lp', 'cd-dvd-bd-lp', 'lp', 'lp-cd'}
         
-    print(f"✅ Pronađeni filteri: {', '.join(filters)}")
+    print(f"✅ Pronađeni filteri: {', '.join(filters)}", flush=True)
     return list(filters)
 
 def scrape_menart():
@@ -53,7 +58,7 @@ def scrape_menart():
     
     for fmt in filters:
         page = 1
-        print(f"\n🚀 Započinjem struganje za format: {fmt}")
+        print(f"\n🚀 Započinjem struganje za format: {fmt}", flush=True)
         
         while True:
             # Konstrukcija URL-a s paginacijom koju si naveo
@@ -62,7 +67,7 @@ def scrape_menart():
             else:
                 url = f"{BASE_URL}page/{page}/?filter_format-glazba={fmt}"
                 
-            print(f"📄 Učitavam stranicu {page}: {url}")
+            print(f"📄 Učitavam stranicu {page}: {url}", flush=True)
             try:
                 response = session.get(url, timeout=15)
                 # Ako udarimo u zid (nema više stranica), WooCommerce često vraća 404
@@ -144,7 +149,7 @@ def scrape_menart():
                 time.sleep(1) # Pristojnost da nas ne blokiraju
                 
             except Exception as e:
-                print(f"❌ Greška na stranici {page}: {e}")
+                print(f"❌ Greška na stranici {page}: {e}", flush=True)
                 break
                 
     # --- ZAPISIVANJE U CSV ---
@@ -156,9 +161,9 @@ def scrape_menart():
             writer.writeheader()
             writer.writerows(all_products)
             
-        print(f"\n🎉 GOTOVO! Uspješno preuzeto {len(all_products)} unikatnih ploča s Menarta.")
+        print(f"\n🎉 GOTOVO! Uspješno preuzeto {len(all_products)} unikatnih ploča s Menarta.", flush=True)
     else:
-        print("⚠️ Nije pronađena niti jedna ploča.")
+        print("⚠️ Nije pronađena niti jedna ploča.", flush=True)
 
 if __name__ == "__main__":
     scrape_menart()
