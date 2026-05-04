@@ -1,113 +1,100 @@
 import requests
-from bs4 import BeautifulSoup
 import csv
 import time
-import os
+import html
 
-print("Učitavam biblioteke i pripremam radnike...", flush=True)
+print("Inicijalizacija API sustava za Dancing Bear...", flush=True)
 
 csv_filename = 'dancingbear_ploce.csv'
 konacna_baza = []
 page = 1
-zaustavi = False
+per_page = 100 # Maksimalan broj proizvoda koji Woo API dopušta po stranici
 
-# Umjesto nestabilnog cloudscrapera, koristimo brzi 'requests' s maskom pravog Chrome preglednika
+# Otvaramo sesiju
 session = requests.Session()
 session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-    'Accept-Language': 'hr,en-US;q=0.7,en;q=0.3'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0'
 })
 
-print("\n=== POKREĆEM GRID SWEEP (SIGURNO SKENIRANJE KATALOGA) ===", flush=True)
-print("Ovaj proces ignorira rasprodane artikle u startu i ne opterećuje server.\n", flush=True)
+print("\n=== POKREĆEM BRZI API SWEEP (DANCING BEAR) ===", flush=True)
 
-while not zaustavi:
-    cat_url = 'https://dancingbear.hr/kategorija-proizvoda/vinyl/' if page == 1 else f'https://dancingbear.hr/kategorija-proizvoda/vinyl/page/{page}/'
+while True:
+    api_url = f"https://dancingbear.hr/wp-json/wc/store/products?page={page}&per_page={per_page}"
     
     try:
-        print(f"Skeniram: {cat_url} ...", end=" ", flush=True)
-        res = session.get(cat_url, timeout=15)
+        print(f"Preuzimam API paket {page}...", end=" ", flush=True)
+        res = session.get(api_url, timeout=20)
         
-        if res.status_code == 404:
-            print(f"\n[INFO] Došli smo do kraja kataloga (Stranica {page} ne postoji).", flush=True)
+        # WooCommerce API vraća 400 kada tražena stranica više ne postoji (tj. prešli smo zadnju ploču)
+        if res.status_code == 400:
+            print("-> Kraj baze dosegnut.", flush=True)
             break
         elif res.status_code != 200:
             print(f" [GREŠKA SERVERA: {res.status_code}]", flush=True)
-            time.sleep(5)
-            page += 1
-            continue
+            break
             
-        soup = BeautifulSoup(res.text, 'html.parser')
-        products = soup.find_all('li', class_='product')
+        data = res.json()
         
-        if not products:
-            print(f"\n[INFO] Stranica {page} nema proizvoda. Završavam skeniranje.", flush=True)
+        if not data:
+            print("-> Paket prazan, završavam.", flush=True)
             break
             
         dodano_na_stranici = 0
         
-        for prod in products:
-            # 1. KONTROLA ZALIHE
-            klase = prod.get('class', [])
-            if 'outofstock' in klase:
+        for item in data:
+            # 1. KONTROLA ZALIHE: Ako je rasprodano, odmah ignoriraj
+            if not item.get('is_in_stock', False):
                 continue
                 
-            # 2. DOHVAT LINKA
-            a_tag = prod.find('a', class_='woocommerce-LoopProduct-link')
-            if not a_tag:
-                a_tag = prod.find('a')
-                
-            if not a_tag or not a_tag.has_attr('href'):
+            # 2. FILTER KATEGORIJE: Uzimamo isključivo vinile
+            # (provjeravamo nalazi li se riječ 'vinyl', 'vinil' ili 'ploce' u slugovima)
+            kategorije = [k.get('slug', '').lower() for k in item.get('categories', [])]
+            if not any('vinyl' in k or 'vinil' in k or 'ploce' in k or 'ploca' in k for k in kategorije):
                 continue
-            
-            link = a_tag['href']
-            
-            # 3. DOHVAT NASLOVA
-            title_el = prod.find(class_='woocommerce-loop-product__title')
-            title = title_el.text.strip() if title_el else "Nepoznat naslov"
-            
-            # 4. DOHVAT SLIKE
-            img_el = prod.find('img')
-            img_url = ""
-            if img_el:
-                if img_el.has_attr('data-src'):
-                    img_url = img_el['data-src']
-                elif img_el.has_attr('src'):
-                    img_url = img_el['src']
-            
-            # 5. DOHVAT CIJENE
-            price = ""
-            price_wrap = prod.find(class_='price')
-            if price_wrap:
-                ins = price_wrap.find('ins')
-                target = ins if ins else price_wrap
-                bdi = target.find('bdi')
                 
-                if bdi:
-                    price = bdi.text.replace('€', '').replace('\xa0', '').strip()
-                else:
-                    price = target.text.replace('€', '').replace('\xa0', '').strip()
+            # 3. ČIŠĆENJE NASLOVA: html.unescape rješava kvakice i crtice (&#8211;)
+            title = html.unescape(item.get('name', 'Nepoznat naslov')).strip()
+            link = item.get('permalink', '')
             
-            if title and link and price:
-                konacna_baza.append([title, price, link, img_url, "Sealed", "Sealed", "Novo"])
-                dodano_na_stranici += 1
+            # 4. PRETVORBA CIJENE: 2200 -> 22.00
+            prices = item.get('prices', {})
+            raw_price = prices.get('price', '0')
+            minor_unit = prices.get('currency_minor_unit', 2)
+            try:
+                price_val = float(raw_price) / (10 ** minor_unit)
+                price = f"{price_val:.2f}"
+            except:
+                price = "0.00"
                 
-        print(f"-> Dodano dostupnih: {dodano_na_stranici}", flush=True)
+            if price == "0.00":
+                continue
+                
+            # 5. DOHVAT ORIGINALNE SLIKE
+            images = item.get('images', [])
+            img_url = images[0].get('src', '') if images else ''
+            
+            # Dancing Bear prodaje isključivo novu robu
+            stanje = "Novo"
+            tip = "Vinil"
+            
+            konacna_baza.append([title, price, link, img_url, stanje, stanje, tip])
+            dodano_na_stranici += 1
+            
+        print(f"-> Uspješno izvučeno vinila: {dodano_na_stranici}", flush=True)
         
         page += 1
-        time.sleep(1) # Prisebno pauziramo 1 sekundu
+        time.sleep(0.5) # Sigurnosna pauza od pola sekunde
         
     except Exception as e:
-        print(f"\n[GREŠKA] Problem pri obradi stranice {page}: {e}", flush=True)
+        print(f"\n[GREŠKA KONEKCIJE] {e}", flush=True)
+        # Ako API padne na trenutak, pričekaj pa probaj ponovno
         time.sleep(5)
-        page += 1
 
-print(f"\n=== ZAVRŠENO SKENIRANJE. SPREMAM BAZU ===", flush=True)
+print(f"\n=== ZAVRŠENO API SKENIRANJE. SPREMAM BAZU ===", flush=True)
 
 with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
     writer = csv.writer(f)
     writer.writerow(['Naslov', 'Cijena', 'URL_Proizvoda', 'URL_Slike', 'Stanje_Medija', 'Stanje_Omota', 'Tip_Artikla'])
     writer.writerows(konacna_baza)
 
-print(f"Uspješno generiran '{csv_filename}'. Spremljeno {len(konacna_baza)} aktivnih ploča.", flush=True)
+print(f"Uspješno generiran '{csv_filename}'. Ukupno spremno za Agregator: {len(konacna_baza)} aktivnih ploča.", flush=True)
