@@ -1,35 +1,39 @@
-name: Dancing Bear Scraper
+name: Dancing Bear API Scraper
 
 on:
-  workflow_dispatch: # Ručno pokretanje na gumb
+  schedule:
+    # Pokreće se svaki dan u 03:00 po UTC vremenu (da se ne sudara s Analognim Zvukom)
+    - cron: '0 3 * * *'
+  workflow_dispatch: # Omogućava ručno pokretanje na gumb "Run workflow"
+
+permissions:
+  contents: write
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
-    - name: Preuzimanje koda
+    - name: Checkout repozitorija
       uses: actions/checkout@v3
 
-    - name: Instalacija Pythona
+    - name: Postavljanje Pythona
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
 
-    - name: Instalacija alata
+    - name: Instalacija potrebnih biblioteka
       run: |
-        pip install cloudscraper beautifulsoup4
+        python -m pip install --upgrade pip
+        pip install requests
 
-    - name: Pokretanje robota
+    - name: Pokretanje API scrapera
       run: python scraper_dancingbear.py
 
-    - name: Spremanje CSV-a natrag u repozitorij
+    - name: Commit i Push promjena
       run: |
-        git config --global user.name 'GitHub Action'
-        git config --global user.email 'action@github.com'
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
         git add dancingbear_ploce.csv
-        git commit -m "Azuriranje Dancing Bear baze" || exit 0
-        git pull --rebase origin main
+        git commit -m "🤖 Automatsko ažuriranje: Dancing Bear (API Sync)" || echo "Nema novih promjena za spremanje"
         git push
