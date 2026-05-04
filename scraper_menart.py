@@ -71,7 +71,6 @@ def scrape_menart():
                     
                 soup = BeautifulSoup(response.content, 'html.parser')
                 
-                # --- OVDJE KORISTIMO TVOJ HTML KOD ---
                 # Tražimo isključivo h2 naslove s njihovim Tailwind klasama
                 titles = soup.find_all('h2', class_=lambda c: c and 'font-bold' in c and 'text-gray-900' in c)
                 
@@ -83,6 +82,11 @@ def scrape_menart():
                     container = title_elem.find_parent('li')
                     if not container:
                         container = title_elem.parent.parent
+
+                    # --- KONTROLA ZALIHE ---
+                    # Preskačemo ploču ako WooCommerce kontejner sadrži klasu rasprodanog artikla
+                    if container and 'outofstock' in container.get('class', []):
+                        continue
                         
                     # 1. Naslov
                     naslov = title_elem.text.strip()
@@ -123,11 +127,11 @@ def scrape_menart():
                     all_products.append({
                         "Naslov": naslov,
                         "Cijena": cijena,
-                        "URL_Slike": slika_url,
                         "URL_Proizvoda": link,
-                        "Tip_Artikla": medij_tekst, # Ovo ide direktno s onog tvog sivog taga
-                        "Stanje_Medija": "Mint (M)",
-                        "Stanje_Omota": "Mint (M)"
+                        "URL_Slike": slika_url,
+                        "Stanje_Medija": "Novo",
+                        "Stanje_Omota": "Novo",
+                        "Tip_Artikla": medij_tekst
                     })
                     seen_urls.add(link)
                     
@@ -145,7 +149,8 @@ def scrape_menart():
                 
     # --- ZAPISIVANJE U CSV ---
     if all_products:
-        zaglavlja = ["Naslov", "Cijena", "URL_Slike", "URL_Proizvoda", "Tip_Artikla", "Stanje_Medija", "Stanje_Omota"]
+        # Poredak usklađen s Agregator standardom
+        zaglavlja = ["Naslov", "Cijena", "URL_Proizvoda", "URL_Slike", "Stanje_Medija", "Stanje_Omota", "Tip_Artikla"]
         with open(CSV_FILENAME, mode='w', newline='', encoding='utf-8') as file:
             writer = csv.DictWriter(file, fieldnames=zaglavlja)
             writer.writeheader()
