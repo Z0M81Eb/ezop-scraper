@@ -2,9 +2,8 @@ name: Dancing Bear API Scraper
 
 on:
   schedule:
-    # Pokreće se svaki dan u 03:00 po UTC vremenu (da se ne sudara s Analognim Zvukom)
     - cron: '0 3 * * *'
-  workflow_dispatch: # Omogućava ručno pokretanje na gumb "Run workflow"
+  workflow_dispatch: 
 
 permissions:
   contents: write
@@ -36,4 +35,5 @@ jobs:
         git config --global user.email 'github-actions[bot]@users.noreply.github.com'
         git add dancingbear_ploce.csv
         git commit -m "🤖 Automatsko ažuriranje: Dancing Bear (API Sync)" || echo "Nema novih promjena za spremanje"
+        git pull --rebase origin main
         git push
