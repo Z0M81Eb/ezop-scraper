@@ -1,5 +1,5 @@
 from playwright.sync_api import sync_playwright
-from playwright_stealth import stealth_sync
+from playwright_stealth import Stealth
 from bs4 import BeautifulSoup
 import csv
 import time
@@ -19,16 +19,14 @@ filteri = [
 print("\n=== POKREĆEM STEALTH HTML SWEEP ===", flush=True)
 
 def run():
-    with sync_playwright() as p:
+    # NOVA SINTAKSA: Stealth sada direktno omata cijeli Playwright sustav
+    with Stealth().use_sync(sync_playwright()) as p:
         # Pokrećemo Chromium
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         page = context.new_page()
-        
-        # Aktivacija stealth moda kako CF ne bi primijetio robota
-        stealth_sync(page)
 
         # Rješavamo Cloudflare na naslovnici (prolazimo 202)
         print("1. Otvaram naslovnicu (Stealth Mode)...", flush=True)
