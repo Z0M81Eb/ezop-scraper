@@ -3,14 +3,13 @@ import csv
 import time
 import re
 
-print("Inicijalizacija hibridnog sustava (Playwright + API) za Analogni Zvuk...", flush=True)
+print("Inicijalizacija hibridnog sustava (In-Page Fetch) za Analogni Zvuk...", flush=True)
 
 csv_filename = 'analognizvuk_ploce.csv'
 konacna_baza = []
 
 def run():
     with sync_playwright() as p:
-        # Pokrećemo pravi Chromium preglednik u pozadini
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -19,14 +18,14 @@ def run():
 
         print("1. Otvaram naslovnicu kako bih riješio Cloudflare zaštitu...", flush=True)
         try:
-            # Idemo na naslovnicu i čekamo da se mreža primiri
             page.goto("https://analogni-zvuk.hr/", wait_until="networkidle", timeout=60000)
-            print("-> Naslovnica učitana. Čekam 5 sekundi da Cloudflare dodijeli sigurnosne kolačiće...", flush=True)
-            time.sleep(5)
+            # Produžujemo pauzu na 10 sekundi za sigurnu provjeru
+            print("-> Naslovnica učitana. Čekam 10 sekundi za potpunu CF verifikaciju...", flush=True)
+            time.sleep(10) 
         except Exception as e:
             print(f"-> Upozorenje pri učitavanju naslovnice: {e}", flush=True)
 
-        print("\n2. Zaštita probijena. Započinjem brzo skidanje preko API-ja...", flush=True)
+        print("\n2. Pokrećem In-Page API skeniranje unutar provjerenog preglednika...", flush=True)
 
         page_num = 1
         while True:
@@ -35,18 +34,34 @@ def run():
             try:
                 print(f"Skidam stranicu {page_num}...", end=" ", flush=True)
                 
-                # Ključan korak: Koristimo 'context' (koji sada ima dozvolu) da direktno dohvatimo API
-                response = context.request.get(api_url, timeout=15000)
+                # KLJUČNA PROMJENA: JS kod se izvršava unutar samog preglednika
+                # Cloudflare ovo tretira kao legitiman AJAX poziv same stranice
+                js_code = f"""
+                async () => {{
+                    try {{
+                        const response = await fetch('{api_url}');
+                        if (!response.ok) {{
+                            return {{ status: response.status, data: null }};
+                        }}
+                        const data = await response.json();
+                        return {{ status: response.status, data: data }};
+                    }} catch (e) {{
+                        return {{ status: 500, data: null, error: e.toString() }};
+                    }}
+                }}
+                """
                 
-                if response.status == 400:
+                result = page.evaluate(js_code)
+                status = result.get('status')
+                data = result.get('data')
+                
+                if status == 400:
                     print("-> Došli smo do kraja baze.", flush=True)
                     break
-                elif response.status != 200:
-                    print(f" [GREŠKA SERVERA: {response.status}]", flush=True)
+                elif status != 200:
+                    print(f" [GREŠKA SERVERA: {status}]", flush=True)
                     break
                     
-                data = response.json()
-                
                 if not data:
                     print("-> Nema više proizvoda.", flush=True)
                     break
@@ -58,7 +73,7 @@ def run():
                     if not item.get('is_in_stock', False):
                         continue
                         
-                    # 2. KATEGORIJA (Filtriramo samo ploče/vinile)
+                    # 2. KATEGORIJA
                     kategorije = [kat.get('name', '').lower() for kat in item.get('categories', [])]
                     if not any('plo' in k or 'vinil' in k or 'vinyl' in k for k in kategorije):
                         continue
@@ -79,7 +94,7 @@ def run():
                     images = item.get('images', [])
                     img_url = images[0].get('src', '') if images else ''
                     
-                    # 4. IZVLAČENJE STANJA IZ OPISA
+                    # 4. IZVLAČENJE STANJA
                     opis = item.get('description', '') + " " + item.get('short_description', '')
                     opis_clean = re.sub(r'<[^>]+>', ' ', opis)
                     
@@ -105,10 +120,10 @@ def run():
                 print(f"-> Dodano ploča: {dodano_na_stranici}", flush=True)
                 
                 page_num += 1
-                time.sleep(0.5)
+                time.sleep(1) # Prisebna pauza između JS poziva
                 
             except Exception as e:
-                print(f"\n[GREŠKA] Problem pri obradi API-ja: {e}", flush=True)
+                print(f"\n[GREŠKA] Problem pri obradi: {e}", flush=True)
                 time.sleep(5)
                 page_num += 1
 
