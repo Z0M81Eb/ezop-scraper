@@ -26,7 +26,7 @@ jobs:
     - name: Pokretanje scrapera
       run: python scraper_karma.py
 
-   - name: Commit i Push
+    - name: Commit i Push
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
