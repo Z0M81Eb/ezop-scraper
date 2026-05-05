@@ -1,21 +1,21 @@
 import cloudscraper
 from bs4 import BeautifulSoup
 import csv
-import os
+import re
 import time
 
-print("Inicijalizacija pametnog scrapera za Ezop Antikvarijat...", flush=True)
+print("Inicijalizacija scrapera za Ezop Antikvarijat...", flush=True)
+
+def ocisti_sliku(url):
+    if not url: return ""
+    # Briše oznake dimenzija poput -300x300, -600x600 itd. prije ekstenzije
+    return re.sub(r'-\d+x\d+(?=\.[a-zA-Z]+$)', '', url)
 
 def pretvori_ocjenu(ezop_ocjena):
     try:
         ocjena = int(ezop_ocjena)
-        if ocjena == 10: return "M"
-        elif ocjena == 9: return "NM"
-        elif ocjena == 8: return "VG+"
-        elif ocjena == 7: return "VG"
-        elif ocjena == 6: return "G+"
-        elif ocjena == 5: return "G"
-        else: return "F/P"
+        mape = {10: "M", 9: "NM", 8: "VG+", 7: "VG", 6: "G+", 5: "G"}
+        return mape.get(ocjena, "F/P")
     except: return ""
 
 scraper = cloudscraper.create_scraper(
@@ -23,67 +23,35 @@ scraper = cloudscraper.create_scraper(
 )
 
 csv_filename = 'ezop_ploce.csv'
+sve_ploce = {} # Koristimo rječnik s URL-om kao ključem radi lakšeg osvježavanja
 
-# === 1. UČITAJ STARU BAZU ===
-old_data = []
-poznati_linkovi = set()
-
-if os.path.exists(csv_filename):
-    with open(csv_filename, 'r', encoding='utf-8') as f:
-        reader = csv.reader(f)
-        header = next(reader, None)
-        for row in reader:
-            if len(row) >= 7:
-                old_data.append(row)
-                cisti_link = row[2].split('?')[0].strip('/')
-                poznati_linkovi.add(cisti_link)
-
-print(f"Učitano {len(old_data)} starih ploča iz memorije.", flush=True)
-
-# === 2. SKENIRANJE STRANICA S PAMETNIM PREKIDOM ===
-novih_ploca = []
+# === SKENIRANJE ===
 page = 1
-zaustavi_skeniranje = False
+print("\n=== POKREĆEM SKENIRANJE I OSVJEŽAVANJE ===", flush=True)
 
-print("\n=== POKREĆEM SKENIRANJE NOVITETA ===", flush=True)
-
-while not zaustavi_skeniranje:
+while True:
     url = 'https://ezop-antikvarijat.hr/kategorija/glazba/' if page == 1 else f'https://ezop-antikvarijat.hr/kategorija/glazba/page/{page}/'
-    print(f"Skeniram Ezop stranicu {page}...", end=" ", flush=True)
+    print(f"Skeniram stranicu {page}...", flush=True)
     
     try:
         response = scraper.get(url, timeout=30)
-        if response.status_code == 404: 
-            print("-> Kraj arhive.", flush=True)
-            break
+        if response.status_code == 404: break
             
         soup = BeautifulSoup(response.text, 'html.parser')
         items = soup.select('div.arhiva-all-info')
         
-        if len(items) == 0: 
-            print("-> Nema proizvoda na stranici.", flush=True)
-            break
-            
-        novih_na_ovoj_stranici = 0
+        if not items: break
             
         for item in items:
             try:
                 a_tag = item.find('a')
-                if not a_tag:
-                    parent_li = item.find_parent('li')
-                    a_tag = parent_li.find('a') if parent_li else None
                 product_url = a_tag['href'] if a_tag and a_tag.has_attr('href') else ""
-                
                 if not product_url: continue
-                
-                cisti_trenutni_link = product_url.split('?')[0].strip('/')
-                
-                if cisti_trenutni_link in poznati_linkovi:
-                    continue
                 
                 is_vinyl = False
                 s_medija, s_omota = "", ""
                 
+                # Provjera je li vinil i kakvo je stanje
                 info_list = item.select('ul.arhiva-cf li')
                 for li in info_list:
                     t = li.text.lower()
@@ -97,60 +65,40 @@ while not zaustavi_skeniranje:
                 
                 if not is_vinyl: continue
 
+                # Naslov i cijena
                 art_el = item.select_one('h2.woocommerce-loop-product__title')
                 alb_el = item.select_one('p.product_author_black')
                 title = f"{art_el.text.strip()} - {alb_el.text.strip()}" if art_el and alb_el else ""
                 
-                parent_block = item.find_parent('li') or item.find_parent('div') or item.parent
-                img_tags = parent_block.find_all('img') if parent_block else item.find_all('img')
-                
-                image_url = ""
-                for img in img_tags:
-                    temp_url = ""
-                    if img.has_attr('srcset'):
-                        srcset_links = img['srcset'].split(',')
-                        if srcset_links:
-                            temp_url = srcset_links[-1].strip().split(' ')[0]
-                    if not temp_url and img.has_attr('data-src'): temp_url = img['data-src']
-                    if not temp_url and img.has_attr('src'): temp_url = img['src']
-                          
-                    if temp_url and not temp_url.startswith('data:image'):
-                        if 'themes/ezop' not in temp_url and 'placeholder' not in temp_url.lower():
-                            image_url = temp_url
-                            break
-                
                 e, c = item.select_one('span.big'), item.select_one('span.small_price')
                 price = f"{e.text.strip()},{c.text.strip()}" if e and c else ""
+
+                # Slike - Čišćenje za punu rezoluciju
+                parent_block = item.find_parent('li')
+                img_tag = parent_block.select_one('img') if parent_block else item.select_one('img')
+                raw_image_url = ""
+                if img_tag:
+                    raw_image_url = img_tag.get('src', '')
+                
+                final_image_url = ocisti_sliku(raw_image_url)
                 
                 if title and price:
-                    # Promijenjeno zadnje polje u "Vinil" radi usklađivanja
-                    novih_ploca.append([title, price, product_url, image_url, s_medija, s_omota, "Vinil"])
-                    novih_na_ovoj_stranici += 1
+                    # Spremamo u rječnik. Ako link već postoji, novi podaci će pregaziti stare (osvježavanje)
+                    sve_ploce[product_url] = [title, price, product_url, final_image_url, s_medija, s_omota, "Vinil"]
                     
-            except Exception as e:
-                continue
-        
-        print(f"-> Dodano: {novih_na_ovoj_stranici}", flush=True)
-
-        if novih_na_ovoj_stranici == 0:
-            print("\nNaišli smo na poznate ploče. Nema više noviteta. Prekidam skeniranje!", flush=True)
-            zaustavi_skeniranje = True
-            break
+            except: continue
             
         page += 1
         time.sleep(1)
         
     except Exception as e:
-        print(f"\nGreška na stranici {page}: {e}", flush=True)
+        print(f"Greška: {e}")
         break
 
-# === 3. SPAJANJE I SPREMANJE ===
-if len(novih_ploca) > 0:
-    sve_ploce = novih_ploca + old_data
+# === SPREMANJE ===
+if sve_ploce:
     with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow(['Naslov', 'Cijena', 'URL_Proizvoda', 'URL_Slike', 'Stanje_Medija', 'Stanje_Omota', 'Tip_Artikla'])
-        writer.writerows(sve_ploce)
-    print(f"\nUspješno generiran CSV. Dodano {len(novih_ploca)} novih ploča u bazu!", flush=True)
-else:
-    print("\nNema novih ploča za dodavanje. Baza je već ažurna!", flush=True)
+        writer.writerows(sve_ploce.values())
+    print(f"\nGotovo. Ukupno obrađeno {len(sve_ploce)} ploča s ažurnim podacima.")
