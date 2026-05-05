@@ -1,4 +1,4 @@
-from curl_cffi import requests
+import cloudscraper
 from bs4 import BeautifulSoup
 import csv
 import os
@@ -6,7 +6,7 @@ import time
 import re
 
 print(f"Trenutna radna mapa: {os.getcwd()}", flush=True)
-print("ANALOGNI ZVUK: Pokrećem curl_cffi TLS spoofing sustav...", flush=True)
+print("ANALOGNI ZVUK: Pokrećem Cloudscraper sustav...", flush=True)
 
 csv_filename = 'analognizvuk_ploce.csv'
 sve_ploce = {}
@@ -31,8 +31,19 @@ if os.path.exists(csv_filename):
 else:
     print("CSV datoteka ne postoji, krećem ispočetka.", flush=True)
 
-# Inicijalizacija sesije koja savršeno simulira Chrome otisak mreže
-session = requests.Session(impersonate="chrome116")
+# Inicijalizacija scrapera
+scraper = cloudscraper.create_scraper(
+    browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
+)
+
+# Rješavanje Cloudflare zaštite na naslovnici
+print("\nProbijanje početne zaštite (Naslovnica)...", flush=True)
+try:
+    scraper.get("https://analogni-zvuk.hr/", timeout=30)
+    time.sleep(5) # Dajemo mu vremena da procesira kolačiće i JS
+    print("Zaštita uspješno testirana. Krećem na skeniranje.", flush=True)
+except Exception as e:
+    print(f"Upozorenje pri početnom spajanju: {e}", flush=True)
 
 # === 2. SKENIRANJE I OSVJEŽAVANJE ===
 for f_data in filteri:
@@ -52,11 +63,15 @@ for f_data in filteri:
         print(f"Stranica {current_page_num}...", end=" ", flush=True)
         
         try:
-            # Šaljemo upit kroz lažni Chrome TLS
-            response = session.get(cat_url, timeout=30)
+            response = scraper.get(cat_url, timeout=30)
             
             if response.status_code == 404:
                 print("-> Kraj arhive za ovaj filter.", flush=True)
+                break
+            elif response.status_code == 202:
+                print("-> [BLOKADA 202] Cloudflare i dalje traži JS provjeru.", flush=True)
+                uspjesno_skenirano = False
+                zaustavi = True
                 break
             elif response.status_code != 200:
                 print(f"-> [GREŠKA SERVERA: {response.status_code}]", flush=True)
@@ -64,7 +79,7 @@ for f_data in filteri:
                 zaustavi = True
                 break
                 
-            soup = BeautifulSoup(response.content, 'html.parser')
+            soup = BeautifulSoup(response.text, 'html.parser')
             products = soup.find_all('li', class_='product')
             
             if not products:
@@ -112,7 +127,7 @@ for f_data in filteri:
                     
             print(f"-> Dodano/Ažurirano: {dodano_na_stranici}", flush=True)
             current_page_num += 1
-            time.sleep(1)
+            time.sleep(1.5)
             
         except Exception as e:
             print(f"\n[GREŠKA MREŽE] {e}", flush=True)
