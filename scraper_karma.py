@@ -4,8 +4,8 @@ import csv
 import os
 import time
 
-print(f"Trenutna radna mapa: {os.getcwd()}")
-print("KARMA VINIL: Pokrećem 'Dan 0' paginacijski uvoz baze (64 po stranici)...")
+print(f"Trenutna radna mapa: {os.getcwd()}", flush=True)
+print("KARMA VINIL: Pokrećem redovito skeniranje, osvježavanje i čišćenje baze...", flush=True)
 
 scraper = cloudscraper.create_scraper(
     browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
@@ -13,28 +13,46 @@ scraper = cloudscraper.create_scraper(
 
 base_url = "https://www.karmavinil.com"
 csv_filename = 'karma_ploce.csv'
-sve_ploce = []
-uhvaceni_linkovi = set()
 
+sve_ploce = {}
+vidjeni_linkovi = set()
+uspjesno_skenirano = False
+
+# === 1. UČITAVANJE STARE BAZE ===
+if os.path.exists(csv_filename):
+    with open(csv_filename, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        next(reader, None) # preskoči zaglavlje
+        for row in reader:
+            if len(row) >= 7:
+                sve_ploce[row[2]] = row # URL je ključ
+    print(f"Učitano {len(sve_ploce)} postojećih ploča iz memorije.", flush=True)
+else:
+    print("CSV datoteka ne postoji, krećem ispočetka.", flush=True)
+
+# === 2. SKENIRANJE I OSVJEŽAVANJE ===
 page = 1
 zaustavi = False
 
 while not zaustavi:
-    # Ažurirana paginacija s točnim parametrima webshopa
     url = f"{base_url}/vinyl-ploce?page_size=64&sort=3&page_number={page}&f=1&min_price=1&max_price=1000"
-    print(f"Skeniram stranicu {page}...")
+    print(f"Skeniram stranicu {page}...", end=" ", flush=True)
     
     try:
-        res = scraper.get(url, timeout=15)
+        res = scraper.get(url, timeout=20)
+        
+        # Karma ponekad vrati preusmjeravanje ili 404 kada dođe do kraja
         if res.status_code != 200:
-            print("Kraj stranica (greška servera).")
+            print(f"-> Kraj arhive (Kod: {res.status_code}).", flush=True)
+            uspjesno_skenirano = True
             break
             
         soup = BeautifulSoup(res.text, 'html.parser')
         product_links = soup.find_all('a', class_='product-click')
         
         if not product_links:
-            print("Nema više proizvoda na ovoj stranici. Završavam!")
+            print("-> Nema više proizvoda. Kraj arhive.", flush=True)
+            uspjesno_skenirano = True
             break
             
         novih_na_stranici = 0
@@ -45,17 +63,14 @@ while not zaustavi:
             if not rel_url: continue
             full_url = base_url + rel_url if not rel_url.startswith('http') else rel_url
             
-            if full_url in uhvaceni_linkovi:
-                continue
-                
-            uhvaceni_linkovi.add(full_url)
-            novih_na_stranici += 1
+            # Bilježimo da smo vidjeli ovaj link danas (bitno za brisanje)
+            vidjeni_linkovi.add(full_url)
             
             # 2. NASLOV
             title = a_tag.get('title', '').strip()
             if not title: title = a_tag.text.strip()
             
-            # 3. KONTEJNER (Tražimo okvir koji drži i sliku i cijenu)
+            # 3. KONTEJNER
             container = a_tag.parent
             for _ in range(5):
                 if container and container.find(class_='price-value'):
@@ -64,20 +79,14 @@ while not zaustavi:
                     
             if not container: continue
                 
-            # 4. SLIKA (Anti-Lazyload sustav)
+            # 4. SLIKA
             image_url = ""
             img_tag = container.find('img')
             if img_tag:
-                img_src = ""
-                # Tražimo stvarne linkove skrivene lazyloadom
-                if img_tag.has_attr('data-src'): img_src = img_tag['data-src']
-                elif img_tag.has_attr('data-original'): img_src = img_tag['data-original']
-                elif img_tag.has_attr('src'): img_src = img_tag['src']
-                
-                # Ignoriramo placeholdere
+                img_src = img_tag.get('data-src') or img_tag.get('data-original') or img_tag.get('src') or ""
                 if img_src and not img_src.startswith('data:image') and 'placeholder' not in img_src.lower():
                     image_url = base_url + img_src if not img_src.startswith('http') else img_src
-                
+            
             # 5. CIJENA
             price = ""
             price_span = container.find(class_='price-value')
@@ -85,23 +94,18 @@ while not zaustavi:
                 strong = price_span.find('strong')
                 if strong: price = strong.text.replace('€', '').replace(',', '.').strip()
                 else: price = price_span.text.replace('€', '').replace(',', '.').strip()
-                    
-            # 6. PAMETNO STANJE OMOTA, MEDIJA I FORMATA
+                
+            # 6. STANJE I FORMAT
             stanje_medija = "Rabljeno"
             stanje_omota = "Rabljeno"
-            tip_artikla = "Vinil ploča" # Fallback ako ne nađe format
+            tip_artikla = "Vinil ploča" 
             
-            # Skuplja sve divove koji sadrže vrijednosti s desne strane
             sve_vrijednosti = container.find_all('div', class_=lambda c: c and 'text-right' in c)
             
             for div in sve_vrijednosti:
                 tekst = div.text.strip().upper()
-                
-                # Detekcija formata (ako piše LP, 7", 12", 2LP...)
                 if tekst in ['LP', '7"', '12"', '2LP', 'CD', 'MC', '10"']:
                     tip_artikla = tekst
-                    
-                # Detekcija stanja (sadrži kosu crtu ili je ocjena)
                 elif '/' in tekst or tekst in ['M', 'NM', 'EX', 'VG+', 'VG', 'G', 'F', 'P', 'SS']:
                     if '/' in tekst:
                         dijelovi = tekst.split('/')
@@ -110,28 +114,36 @@ while not zaustavi:
                     else:
                         stanje_medija = tekst
                         stanje_omota = tekst
-                    
-            if title and price:
-                # Ovdje smo ubacili tip_artikla na zadnje mjesto umjesto "Rabljeno"
-                sve_ploce.append([title, price, full_url, image_url, stanje_medija, stanje_omota, tip_artikla])
-                
-        if novih_na_stranici == 0:
-            print("\nDetektirano ponavljanje proizvoda. Došli smo do kraja asortimana. Prekidam!")
-            zaustavi = True
-            break
             
-        print(f" -> Stranica {page} obrađena. Ukupno izvučeno do sada: {len(sve_ploce)}")
+            if title and price:
+                # Osvježavamo ili dodajemo ploču u rječnik
+                sve_ploce[full_url] = [title, price, full_url, image_url, stanje_medija, stanje_omota, tip_artikla]
+                novih_na_stranici += 1
+                
+        print(f"-> Pronađeno/ažurirano ploča: {novih_na_stranici}", flush=True)
         page += 1
-        time.sleep(1) # Prijateljski delay
+        time.sleep(1) 
         
     except Exception as e:
-        print(f"Greška na stranici {page}: {e}")
+        print(f"\nGreška na stranici {page}: {e}", flush=True)
         break
 
-# === SPREMANJE ===
-with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
-    writer = csv.writer(f)
-    writer.writerow(['Naslov', 'Cijena', 'URL_Proizvoda', 'URL_Slike', 'Stanje_Medija', 'Stanje_Omota', 'Tip_Artikla'])
-    writer.writerows(sve_ploce)
+# === 3. LOGIKA BRISANJA PRODANIH ===
+if uspjesno_skenirano:
+    pocetni_broj = len(sve_ploce)
+    # Zadržavamo samo one ploče čiji su linkovi primijećeni tijekom današnjeg skeniranja
+    sve_ploce = {k: v for k, v in sve_ploce.items() if k in vidjeni_linkovi}
+    obrisano = pocetni_broj - len(sve_ploce)
+    print(f"\nAnaliza završena. Obrisano {obrisano} prodanih ploča koje više ne postoje na webshopu.", flush=True)
+else:
+    print("\nUPOZORENJE: Skripta nije završila čisto zbog greške ili prekida veze. Preskačem brisanje starih ploča radi sigurnosti baze.", flush=True)
 
-print(f"\nGOTOVO! Baza uspješno inicijalizirana s {len(sve_ploce)} ploča.")
+# === 4. SPREMANJE ===
+if sve_ploce:
+    with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Naslov', 'Cijena', 'URL_Proizvoda', 'URL_Slike', 'Stanje_Medija', 'Stanje_Omota', 'Tip_Artikla'])
+        writer.writerows(sve_ploce.values())
+    print(f"Završeno! Baza je ažurna i sadrži {len(sve_ploce)} ploča.", flush=True)
+else:
+    print("Nema podataka za spremanje.", flush=True)
