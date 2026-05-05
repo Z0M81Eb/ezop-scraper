@@ -26,9 +26,15 @@ jobs:
     - name: Pokretanje scrapera
       run: python scraper_ezop.py
 
-    - name: Commit i Push
+  - name: Commit i Push
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
-        git add ezop_ploce.csv
-        git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update Ezop kataloga" && git push)
+        git add *.csv
+        if ! git diff --staged --quiet; then
+          git commit -m "Auto-update kataloga"
+          git pull --rebase origin main
+          git push
+        else
+          echo "Nema novih promjena za spremanje."
+        fi
