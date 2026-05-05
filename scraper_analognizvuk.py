@@ -1,14 +1,17 @@
-from playwright.sync_api import sync_playwright
-from playwright_stealth import Stealth
+from curl_cffi import requests
 from bs4 import BeautifulSoup
 import csv
+import os
 import time
 import re
 
-print("Učitavam stealth sustav za struganje HTML-a...", flush=True)
+print(f"Trenutna radna mapa: {os.getcwd()}", flush=True)
+print("ANALOGNI ZVUK: Pokrećem curl_cffi TLS spoofing sustav...", flush=True)
 
 csv_filename = 'analognizvuk_ploce.csv'
-konacna_baza = []
+sve_ploce = {}
+vidjeni_linkovi = set()
+uspjesno_skenirano = True
 
 filteri = [
     {'url_param': 'novo', 'stanje': 'Novo'},
@@ -16,132 +19,121 @@ filteri = [
     {'url_param': 'raritet', 'stanje': 'Second Hand'}
 ]
 
-print("\n=== POKREĆEM STEALTH HTML SWEEP ===", flush=True)
+# === 1. UČITAVANJE STARE BAZE ===
+if os.path.exists(csv_filename):
+    with open(csv_filename, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        next(reader, None)
+        for row in reader:
+            if len(row) >= 7:
+                sve_ploce[row[2]] = row
+    print(f"Učitano {len(sve_ploce)} postojećih ploča iz memorije.", flush=True)
+else:
+    print("CSV datoteka ne postoji, krećem ispočetka.", flush=True)
 
-def run():
-    # NOVA SINTAKSA: Stealth sada direktno omata cijeli Playwright sustav
-    with Stealth().use_sync(sync_playwright()) as p:
-        # Pokrećemo Chromium
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-        page = context.new_page()
+# Inicijalizacija sesije koja savršeno simulira Chrome otisak mreže
+session = requests.Session(impersonate="chrome116")
 
-        # Rješavamo Cloudflare na naslovnici (prolazimo 202)
-        print("1. Otvaram naslovnicu (Stealth Mode)...", flush=True)
+# === 2. SKENIRANJE I OSVJEŽAVANJE ===
+for f_data in filteri:
+    param = f_data['url_param']
+    stanje_kataloga = f_data['stanje']
+    current_page_num = 1
+    zaustavi = False
+
+    print(f"\n--- Skeniram arhivu: {param.upper()} ---", flush=True)
+
+    while not zaustavi:
+        if current_page_num == 1:
+            cat_url = f'https://analogni-zvuk.hr/product-category/gramofonske-ploce/?filter_stanje={param}'
+        else:
+            cat_url = f'https://analogni-zvuk.hr/product-category/gramofonske-ploce/page/{current_page_num}/?filter_stanje={param}'
+        
+        print(f"Stranica {current_page_num}...", end=" ", flush=True)
+        
         try:
-            page.goto("https://analogni-zvuk.hr/", wait_until="networkidle", timeout=60000)
-            print("-> Naslovnica učitana. Maske su postavljene. Čekam 10 sekundi...", flush=True)
-            time.sleep(10)
-        except Exception as e:
-            print(f"-> Upozorenje na naslovnici: {e}", flush=True)
-
-        for f in filteri:
-            current_page_num = 1
-            zaustavi = False
-            param = f['url_param']
-            stanje_kataloga = f['stanje']
+            # Šaljemo upit kroz lažni Chrome TLS
+            response = session.get(cat_url, timeout=30)
             
-            print(f"\n--- Skeniram arhivu: {param.upper()} ---", flush=True)
-
-            while not zaustavi:
-                if current_page_num == 1:
-                    cat_url = f'https://analogni-zvuk.hr/product-category/gramofonske-ploce/?filter_stanje={param}'
-                else:
-                    cat_url = f'https://analogni-zvuk.hr/product-category/gramofonske-ploce/page/{current_page_num}/?filter_stanje={param}'
+            if response.status_code == 404:
+                print("-> Kraj arhive za ovaj filter.", flush=True)
+                break
+            elif response.status_code != 200:
+                print(f"-> [GREŠKA SERVERA: {response.status_code}]", flush=True)
+                uspjesno_skenirano = False
+                zaustavi = True
+                break
                 
-                try:
-                    print(f"Stranica {current_page_num}...", end=" ", flush=True)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            products = soup.find_all('li', class_='product')
+            
+            if not products:
+                print("-> Nema proizvoda na stranici. Kraj.", flush=True)
+                break
+                
+            dodano_na_stranici = 0
+            
+            for prod in products:
+                klase = prod.get('class', [])
+                if 'outofstock' in klase:
+                    continue
                     
-                    response = page.goto(cat_url, wait_until="networkidle", timeout=45000)
+                a_tag = prod.find('a', class_='woocommerce-LoopProduct-link') or prod.find('a')
+                if not a_tag or not a_tag.has_attr('href'):
+                    continue
                     
-                    if response is None:
-                        print(f" [Nema odgovora]", flush=True)
-                        time.sleep(5)
-                        current_page_num += 1
-                        continue
-
-                    if response.status == 404:
-                         print(f"-> Kraj arhive za ovaj filter.", flush=True)
-                         break
-                    elif response.status not in (200, 304):
-                         print(f" [GREŠKA SERVERA: {response.status}]", flush=True)
-                         time.sleep(5)
-                         current_page_num += 1
-                         continue
-
-                    # Ako je 200, stružemo HTML
-                    html_content = page.content()
-                    soup = BeautifulSoup(html_content, 'html.parser')
-                    products = soup.find_all('li', class_='product')
+                link = a_tag['href']
+                vidjeni_linkovi.add(link)
+                
+                title_el = prod.find(class_='woocommerce-loop-product__title')
+                title = title_el.text.replace('&#8211;', '-').strip() if title_el else "Nepoznat naslov"
+                
+                price = ""
+                price_wrap = prod.find(class_='price')
+                if price_wrap:
+                    ins = price_wrap.find('ins')
+                    target = ins if ins else price_wrap
+                    bdi = target.find('bdi')
+                    if bdi:
+                        price = bdi.text.replace('€', '').replace(',', '.').replace('\xa0', '').strip()
+                    else:
+                        price = target.text.replace('€', '').replace(',', '.').replace('\xa0', '').strip()
+                        
+                img_url = ""
+                img_el = prod.find('img')
+                if img_el:
+                    src = img_el.get('data-src') or img_el.get('src')
+                    if src:
+                        img_url = re.sub(r'-\d+x\d+(\.\w+)$', r'\1', src)
+                        
+                if title and link and price:
+                    sve_ploce[link] = [title, price, link, img_url, stanje_kataloga, stanje_kataloga, "Vinil"]
+                    dodano_na_stranici += 1
                     
-                    if not products:
-                        print(f"-> Nema proizvoda na stranici.", flush=True)
-                        break
-                        
-                    dodano_na_stranici = 0
-                    
-                    for prod in products:
-                        klase = prod.get('class', [])
-                        # Ako je prodano, odbacujemo
-                        if 'outofstock' in klase:
-                            continue
-                            
-                        a_tag = prod.find('a', class_='woocommerce-LoopProduct-link')
-                        if not a_tag:
-                            a_tag = prod.find('a')
-                            
-                        if not a_tag or not a_tag.has_attr('href'):
-                            continue
-                        
-                        link = a_tag['href']
-                        
-                        title_el = prod.find(class_='woocommerce-loop-product__title')
-                        title = title_el.text.replace('&#8211;', '-').strip() if title_el else "Nepoznat naslov"
-                        
-                        price = ""
-                        price_wrap = prod.find(class_='price')
-                        if price_wrap:
-                            ins = price_wrap.find('ins')
-                            target = ins if ins else price_wrap
-                            bdi = target.find('bdi')
-                            
-                            if bdi:
-                                price = bdi.text.replace('€', '').replace(',', '.').replace('\xa0', '').strip()
-                            else:
-                                price = target.text.replace('€', '').replace(',', '.').replace('\xa0', '').strip()
-                        
-                        img_url = ""
-                        img_el = prod.find('img')
-                        if img_el:
-                            src = img_el.get('data-src') or img_el.get('src')
-                            if src:
-                                img_url = re.sub(r'-\d+x\d+(\.\w+)$', r'\1', src)
-                        
-                        if title and link and price:
-                            konacna_baza.append([title, price, link, img_url, stanje_kataloga, stanje_kataloga, "Vinil"])
-                            dodano_na_stranici += 1
-                            
-                    print(f"-> Dodano: {dodano_na_stranici}", flush=True)
-                    
-                    current_page_num += 1
-                    time.sleep(2) # Malo duža pauza da budemo nevidljivi
-                    
-                except Exception as e:
-                    print(f"\n[GREŠKA] Problem pri obradi HTML-a: {e}", flush=True)
-                    time.sleep(5)
-                    current_page_num += 1
+            print(f"-> Dodano/Ažurirano: {dodano_na_stranici}", flush=True)
+            current_page_num += 1
+            time.sleep(1)
+            
+        except Exception as e:
+            print(f"\n[GREŠKA MREŽE] {e}", flush=True)
+            uspjesno_skenirano = False
+            break
 
-        browser.close()
+# === 3. LOGIKA BRISANJA PRODANIH ===
+if uspjesno_skenirano:
+    pocetni_broj = len(sve_ploce)
+    sve_ploce = {k: v for k, v in sve_ploce.items() if k in vidjeni_linkovi}
+    obrisano = pocetni_broj - len(sve_ploce)
+    print(f"\nAnaliza završena. Obrisano {obrisano} prodanih ploča koje više ne postoje na webshopu.", flush=True)
+else:
+    print("\nUPOZORENJE: Skripta nije završila čisto zbog greške ili prekida veze. Preskačem brisanje starih ploča radi sigurnosti baze.", flush=True)
 
-run()
-
-print(f"\n=== ZAVRŠENO SKENIRANJE. SPREMAM BAZU ===", flush=True)
-
-with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
-    writer = csv.writer(f)
-    writer.writerow(['Naslov', 'Cijena', 'URL_Proizvoda', 'URL_Slike', 'Stanje_Medija', 'Stanje_Omota', 'Tip_Artikla'])
-    writer.writerows(konacna_baza)
-
-print(f"Uspješno generiran '{csv_filename}'. Ukupno spremno za uvoz: {len(konacna_baza)} aktivnih ploča.", flush=True)
+# === 4. SPREMANJE ===
+if sve_ploce:
+    with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Naslov', 'Cijena', 'URL_Proizvoda', 'URL_Slike', 'Stanje_Medija', 'Stanje_Omota', 'Tip_Artikla'])
+        writer.writerows(sve_ploce.values())
+    print(f"Završeno! Baza je ažurna i sadrži {len(sve_ploce)} ploča.", flush=True)
+else:
+    print("Nema podataka za spremanje.", flush=True)
